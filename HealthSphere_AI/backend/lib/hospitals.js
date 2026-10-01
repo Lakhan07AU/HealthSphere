@@ -168,24 +168,42 @@ function orderedMirrors() {
   return [...OVERPASS_URLS.slice(preferredMirror), ...OVERPASS_URLS.slice(0, preferredMirror)];
 }
 
-/* Overpass can legitimately take 10–20s for a busy bbox query; aborting at
-   10s killed every attempt and silently degraded to the sample dataset. */
-async function overpassQuery(query, timeoutMs = 12000) {
-  for (const base of orderedMirrors()) {
+/* Overpass mirrors are individually unreliable: the main instance 504s under
+   load and others stall past 12s. Racing them (staggered) instead of calling
+   them serially keeps the worst case at one timeout, not four. */
+async function overpassQuery(query, timeoutMs = 15000) {
+  const ctrls = [];
+  const attempt = (base) => {
     const ctrl = new AbortController();
+    ctrls.push(ctrl);
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     const idx = OVERPASS_URLS.indexOf(base);
-    try {
-      const r = await fetch(base, { method: 'POST', headers: LIVE_HEADERS, body: 'data=' + encodeURIComponent(query), signal: ctrl.signal });
-      clearTimeout(t);
-      if (!r.ok) continue;
-      preferredMirror = idx >= 0 ? idx : preferredMirror;
-      return await r.json();
-    } catch {
-      clearTimeout(t);
-    }
+    return fetch(base, { method: 'POST', headers: LIVE_HEADERS, body: 'data=' + encodeURIComponent(query), signal: ctrl.signal })
+      .then(r => { if (!r.ok) throw new Error(`http_${r.status}`); return r.json(); })
+      .then(data => {
+        if (!data || !Array.isArray(data.elements)) throw new Error('bad_payload');
+        preferredMirror = idx >= 0 ? idx : preferredMirror;
+        return data;
+      })
+      .finally(() => clearTimeout(t));
+  };
+
+  const order = orderedMirrors();
+  try {
+    const data = await new Promise((resolve, reject) => {
+      let failed = 0;
+      order.forEach((base, i) => {
+        const start = () => attempt(base).then(resolve, () => {
+          if (++failed === order.length) reject(new Error('overpass_unavailable'));
+        });
+        i === 0 ? start() : setTimeout(start, i * 1200);
+      });
+    });
+    return data;
+  } finally {
+    // cancel any still-running losers so they don't hold sockets open
+    ctrls.forEach(c => { try { c.abort(); } catch { /* noop */ } });
   }
-  throw new Error('overpass_unavailable');
 }
 
 let liveSeq = 0;
@@ -210,7 +228,7 @@ export async function fetchNearbyLive({ lat, lng, type = 'all', q = '', radiusM 
       data = await serialized(() => overpassQuery(query));
       cooldownUntil = 0;
     } catch (e) {
-      cooldownUntil = Date.now() + 45 * 1000;
+      cooldownUntil = Date.now() + 30 * 1000;
       throw e;
     }
 
