@@ -60,7 +60,7 @@ function applySecurityHeaders(res) {
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.clarity.ms; " +
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
         "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; " +
-        "connect-src 'self'; frame-ancestors 'none'");
+        "connect-src 'self'; frame-src https://www.openstreetmap.org; frame-ancestors 'none'");
     }
     return origWriteHead(status, headers);
   };

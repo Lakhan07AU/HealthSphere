@@ -97,7 +97,8 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .signout-btn{background:var(--secondary);border:1px solid var(--border);color:#33465E;font-size:12px;font-weight:700;padding:8px 13px;border-radius:var(--radius-pill);cursor:pointer;font-family:inherit;min-height:36px}
 .signout-btn:hover{color:var(--destructive);border-color:#E5A9A3;background:#FDF1F0}
 /* grouped tab-cluster nav (pyronis pattern) */
-.topnav-links{max-width:1240px;margin:0 auto;display:flex;align-items:center;gap:3px;padding:1px 24px 9px;overflow-x:auto}
+.topnav-links{max-width:1240px;margin:0 auto;display:flex;align-items:center;gap:3px;padding:1px 24px 9px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+.topnav-links::-webkit-scrollbar{display:none}
 .nav-group-label{font-size:9.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-fg);padding:0 6px 0 10px;font-family:var(--font-display);flex-shrink:0}
 .nav-group-label:first-child{padding-left:0}
 .nav-group-sep{width:1px;height:20px;background:var(--border);margin:0 8px;flex-shrink:0}
