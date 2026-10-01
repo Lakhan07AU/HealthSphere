@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# runtime data (user database & uploaded reports) — auto-seeded on first boot
+data/
+uploads/
+
+# environment / secrets
+.env
+.env.*
+
+# misc
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

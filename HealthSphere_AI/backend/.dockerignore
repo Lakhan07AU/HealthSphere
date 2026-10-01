@@ -1,0 +1,13 @@
+node_modules/
+data/
+uploads/
+*.log
+.tmp
+.env
+.env.*
+tests/
+scripts/
+Dockerfile
+.dockerignore
+README.md
+vercel.json

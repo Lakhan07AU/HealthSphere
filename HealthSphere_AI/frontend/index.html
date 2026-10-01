@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="HealthSphere AI — your family's connected health record. Reports, trends, risks, lifestyle and nearby care in one calm workspace.">
+<title>HealthSphere AI — Family Health Intelligence</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230D7C6B'/%3E%3Ctext x='16' y='22' font-family='Georgia,serif' font-size='17' font-weight='700' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0057B8">
+<link rel="stylesheet" href="/css/styles.css?v=20">
+<script>
+window.APP_VERSION = "20"; // single cache-busting version for all local assets
+window.CLARITY_ID = ""; // optional: paste your Microsoft Clarity project ID to enable session replay (free, unlimited). Empty = disabled.
+if (window.CLARITY_ID) {
+  (function (c, l, t, r, i) {
+    c[r] = c[r] || function () { (c[r].q = c[r].q || []).push(arguments); };
+    var s = l.createElement(t); s.async = 1; s.src = "https://www.clarity.ms/tag/" + i;
+    var y = l.getElementsByTagName(t)[0]; y.parentNode.insertBefore(s, y);
+  })(window, document, "script", "clarity", window.CLARITY_ID);
+}
+window.onerror = function (msg, src, line) {
+  var d = document.getElementById('boot-error');
+  if (d) { d.style.display = 'block'; d.textContent += 'Error: ' + msg + ' (' + (src || '').split('/').pop() + ':' + line + ')\n'; }
+};
+</script>
+</head>
+<body>
+<div id="app"><div style="display:grid;place-items:center;height:100vh;color:#8a97a1;font-family:'Segoe UI',sans-serif;font-size:13px">Loading HealthSphere AI</div></div>
+<div id="boot-error" style="display:none;white-space:pre-wrap;background:#fbeaea;color:#7f1d1d;padding:14px;border-radius:8px;margin:12px;font-family:monospace;font-size:12px"></div>
+<div id="toasts"></div>
+<div id="modal-root"></div>
+
+<script defer src="/js/api.js?v=20"></script>
+<script defer src="/js/icons.js?v=20"></script>
+<script defer src="/js/ui.js?v=20"></script>
+<script defer src="/js/hero-canvas.js?v=20"></script>
+<script defer src="/js/views-auth.js?v=20"></script>
+<script defer src="/js/views-landing.js?v=20"></script>
+<script defer src="/js/views-dashboard.js?v=20"></script>
+<script defer src="/js/views-health.js?v=20"></script>
+<script defer src="/js/jspdf.umd.min.js"></script>
+<script defer src="/js/jspdf.plugin.autotable.min.js"></script>
+<script defer src="/js/views-lifestyle.js?v=20"></script>
+<script defer src="/js/views-care.js?v=20"></script>
+<script defer src="/js/views-admin.js?v=20"></script>
+<script defer src="/js/views-doctor-auth.js?v=20"></script>
+<script defer src="/js/views-doctor.js?v=20"></script>
+<script defer src="/js/views-store-auth.js?v=20"></script>
+<script defer src="/js/views-store-owner.js?v=20"></script>
+<script defer src="/js/views-consult.js?v=20"></script>
+<script defer src="/js/views-storage.js?v=20"></script>
+<script defer src="/js/views-stores.js?v=20"></script>
+<script defer src="/js/assistant.js?v=20"></script>
+<script defer src="/js/app.js?v=20"></script>
+<script>
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# HealthSphere AI — one-command local/prod stack
+#   docker compose up --build      → open http://localhost:8080
+services:
+  backend:
+    build: ./backend       # Node API server (STATIC_DIR=off — nginx serves the SPA)
+    environment:
+      NODE_ENV: production
+      # Admin panel is deny-by-default; set real emails before demoing admin:
+      # ADMIN_EMAILS: "you@example.com"
+      # Optional persistent storage instead of the docker volume:
+      # SUPABASE_DB_URL: "postgresql://..."
+      # SUPABASE_URL: "https://xyzcompany.supabase.co"
+      # SUPABASE_SERVICE_KEY: "..."
+    volumes:
+      - hs_data:/app/data   # db.json + uploaded reports survive rebuilds
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend      # nginx: static SPA + proxy /api → backend:3000
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  hs_data:
