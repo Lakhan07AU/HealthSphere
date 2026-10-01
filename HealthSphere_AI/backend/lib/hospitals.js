@@ -168,9 +168,9 @@ function orderedMirrors() {
   return [...OVERPASS_URLS.slice(preferredMirror), ...OVERPASS_URLS.slice(0, preferredMirror)];
 }
 
-/* Overpass can legitimately take 10–20s for an around() query; aborting at
+/* Overpass can legitimately take 10–20s for a busy bbox query; aborting at
    10s killed every attempt and silently degraded to the sample dataset. */
-async function overpassQuery(query, timeoutMs = 25000) {
+async function overpassQuery(query, timeoutMs = 12000) {
   for (const base of orderedMirrors()) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -197,10 +197,13 @@ export async function fetchNearbyLive({ lat, lng, type = 'all', q = '', radiusM 
 
     // One broad query per location — all type/name filtering happens in memory
     // afterwards so filter changes never hit the network again.
-    const bboxParts = TYPE_FILTER.all.map(f =>
-      `node(around:${radiusM},${lat},${lng})${f};way(around:${radiusM},${lat},${lng})${f};`
-    ).join('');
-    const query = `[out:json][timeout:25];(${bboxParts});out center tags 160;`;
+    // Bounding box, not around(): Overpass 504s on around() unions (~8s+) while
+    // the equivalent bbox returns 200 in ~2s. The exact radius is enforced below.
+    const dLat = radiusM / 111320;
+    const dLng = radiusM / (111320 * Math.max(0.01, Math.cos(lat * Math.PI / 180)));
+    const bbox = `${(lat - dLat).toFixed(6)},${(lng - dLng).toFixed(6)},${(lat + dLat).toFixed(6)},${(lng + dLng).toFixed(6)}`;
+    const bboxParts = TYPE_FILTER.all.map(f => `node(${bbox})${f};way(${bbox})${f};`).join('');
+    const query = `[out:json][timeout:15];(${bboxParts});out center tags 200;`;
 
     let data;
     try {
@@ -231,6 +234,8 @@ export async function fetchNearbyLive({ lat, lng, type = 'all', q = '', radiusM 
     }).filter(f => f.lat != null && f.lng != null && f.name !== 'Unnamed facility');
 
     for (const f of fullList) f.distanceKm = +(haversine(lat, lng, f.lat, f.lng)).toFixed(1);
+    // bbox is a square — cut the corners so only true radius results remain.
+    fullList = fullList.filter(f => f.distanceKm * 1000 <= radiusM);
     const seen = [];
     fullList = fullList.filter(f => !seen.some(s => s.name === f.name && Math.abs(s.distanceKm - f.distanceKm) < 0.05) && seen.push(f));
     fullList.sort((a, b) => a.distanceKm - b.distanceKm);
