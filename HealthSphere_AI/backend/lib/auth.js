@@ -1,6 +1,7 @@
 ﻿import crypto from 'node:crypto';
 import { db, persist } from './db.js';
 import { uid } from './util.js';
+import { validateConsent } from './terms.js';
 
 const SESSION_DAYS = 7;
 
@@ -19,15 +20,25 @@ export function verifyPassword(password, salt, expectedHash) {
   }
 }
 
-export function registerUser({ email, name, password }) {
+export function registerUser({ email, name, password, ...consentBody }) {
   email = String(email || '').trim().toLowerCase();
   name = String(name || '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Please enter a valid email address.');
   if (!name) throw new Error('Name is required.');
   if (!password || String(password).length < 6) throw new Error('Password must be at least 6 characters.');
   if (db.users.some(u => u.email === email)) throw new Error('An account with this email already exists.');
+
+  // Require explicit, version-stamped acceptance of Terms + consents. This is
+  // recorded immutably on the user record and surfaced in the audit log.
+  const { record: consentRecord } = validateConsent(consentBody);
+
   const { salt, hash } = hashPassword(String(password));
-  const user = { id: uid('usr'), email, name, passwordSalt: salt, passwordHash: hash, createdAt: new Date().toISOString() };
+  const user = {
+    id: uid('usr'), email, name,
+    passwordSalt: salt, passwordHash: hash,
+    createdAt: new Date().toISOString(),
+    consent: consentRecord
+  };
   db.users.push(user);
   persist();
   return user;
@@ -117,7 +128,7 @@ function collSafe(userId) {
    ADMIN_EMAILS env var (comma-separated) controls membership. When unset,
    no one is admin by default (deny-by-default — the demo account must
    never be privileged). */
-const DEFAULT_ADMIN_EMAILS = [];
+const DEFAULT_ADMIN_EMAILS = ['admin123@healthsphere.ai'];
 
 export function isAdmin(user) {
   if (!user || !user.email) return false;

@@ -143,7 +143,13 @@ const App = {
       const fd = new FormData(e.target);
       try {
         const r = await api('/api/auth/login', { method: 'POST', body: { email: fd.get('email'), password: fd.get('password') } });
-        App.onAuthed({ ...r.user, isAdmin: !!r.isAdmin });
+        if (!r.isAdmin) { toast('This account does not have admin access.', 'err'); return; }
+        App.user = { ...r.user, isAdmin: true };
+        App.doctorUser = null;
+        App.storeOwner = null;
+        location.hash = '#/admin/overview';
+        App.renderAdminShell();
+        App.routeAdmin();
       } catch (err) { toast(err.message, 'err'); }
     };
   },
@@ -164,7 +170,7 @@ const App = {
         ['#/consult', 'Doctors'], ['#/stores', 'Stores'],
         ['#/care', 'Care team'], ['#/hospitals', 'Nearby'], ['#/storage', 'Storage'], ['#/settings', 'Settings']] },
     ];
-    const ALL = [...GROUPS.flatMap(g => g.links), ...(this.user?.isAdmin ? [['#/admin', 'Admin']] : [])];
+    const ALL = [...GROUPS.flatMap(g => g.links), ...(this.user?.isAdmin ? [['#/admin/overview', 'Admin']] : [])];
     document.getElementById('app').innerHTML = `
       <div class="shell top-shell">
         <a class="skip-link" href="#view">Skip to content</a>
@@ -190,7 +196,7 @@ const App = {
           </div>
           <nav class="topnav-links" aria-label="Primary">
             ${GROUPS.map(g => `<span class="nav-group-label">${g.label}</span>${g.links.map(([h, l]) => `<button class="nav-item" data-h="${h}">${l}</button>`).join('')}`).join('<span class="nav-group-sep" aria-hidden="true"></span>')}
-            ${this.user?.isAdmin ? `<span class="nav-group-sep" aria-hidden="true"></span><button class="nav-item nav-admin" data-h="#/admin">Admin</button>` : ''}
+            ${this.user?.isAdmin ? `<span class="nav-group-sep" aria-hidden="true"></span><button class="nav-item nav-admin" data-h="#/admin/overview">Admin</button>` : ''}
           </nav>
           <div class="crumbbar"><div class="crumbbar-inner"><span id="crumbs" aria-live="polite"></span></div></div>
         </header>
@@ -380,8 +386,6 @@ const App = {
           <div class="brand-sub">Doctor Portal</div>
           <div class="nav-label">Consultation</div>
           <button class="nav-item" data-h="#/doctor/dashboard">Dashboard</button>
-          <div class="nav-label">Account</div>
-          <button class="nav-item" data-h="#/settings">Settings</button>
           <div class="nav-sep"></div>
           <div class="side-user">
             <div class="avatar">${esc(initials)}</div>
@@ -423,8 +427,6 @@ const App = {
           <div class="brand-sub">Store Owner Portal</div>
           <div class="nav-label">Store</div>
           <button class="nav-item" data-h="#/store-owner/dashboard">My Store</button>
-          <div class="nav-label">Account</div>
-          <button class="nav-item" data-h="#/settings">Settings</button>
           <div class="nav-sep"></div>
           <div class="side-user">
             <div class="avatar">${esc(initials)}</div>
@@ -453,6 +455,53 @@ const App = {
     };
   },
 
+  renderAdminShell() {
+    const u = this.user;
+    const initials = (u?.name || 'A').split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
+    document.getElementById('app').innerHTML = `
+      <div class="shell with-sidebar">
+        <aside class="sidebar adm-sidebar">
+          <div class="brand"><span class="brand-mark">H</span><b>HealthSphere</b><span>AI</span></div>
+          <div class="brand-sub">Admin Portal</div>
+          <div class="nav-label">Platform</div>
+          <button class="nav-item" data-h="#/admin/overview">Overview</button>
+          <div class="nav-label">Management</div>
+          <button class="nav-item" data-h="#/admin/users">Users</button>
+          <button class="nav-item" data-h="#/admin/doctors">Doctors</button>
+          <button class="nav-item" data-h="#/admin/stores">Stores</button>
+          <div class="nav-label">Operations</div>
+          <button class="nav-item" data-h="#/admin/tickets">Tickets</button>
+          <button class="nav-item" data-h="#/admin/feedback">Feedback</button>
+          <div class="nav-label">System</div>
+          <button class="nav-item" data-h="#/admin/system">Sessions</button>
+          <div class="nav-sep"></div>
+          <div class="side-user">
+            <div class="avatar">${esc(initials)}</div>
+            <div class="u-meta">
+              <b>${esc(u?.name || '')}</b>
+              <span>${esc(u?.email || '')}</span>
+            </div>
+          </div>
+          <div style="padding:4px 10px">
+            <a href="#/dashboard" style="font-size:11px;color:#7d95a1">← Patient dashboard</a>
+          </div>
+          <div style="padding:4px 10px">
+            <button id="admin-logout-btn" style="background:none;border:none;color:#7d95a1;font-size:11.5px;cursor:pointer;font-family:inherit;padding:4px 6px">Sign out</button>
+          </div>
+        </aside>
+        <main class="main" id="view"></main>
+      </div>`;
+
+    this._bindShellNav();
+    document.getElementById('admin-logout-btn').onclick = async () => {
+      await api('/api/auth/logout', { method: 'POST' });
+      this.user = null;
+      location.hash = '#/login';
+      this.routeAuth();
+      toast('Signed out');
+    };
+  },
+
   _bindShellNav() {
     if (!this._navDelegated) {
       this._navDelegated = true;
@@ -477,7 +526,11 @@ const App = {
       '#/reports': 'Medical reports', '#/timeline': 'Timeline', '#/insights': 'Insights & risks',
       '#/lifestyle': 'Lifestyle', '#/reminders': 'Reminders', '#/consult': 'Consult a doctor',
       '#/stores': 'Medical stores', '#/care': 'Care team', '#/hospitals': 'Nearby care', '#/storage': 'File storage',
-      '#/settings': 'Settings', '#/admin': 'Admin', '#/emergency': 'Emergency mode',
+      '#/settings': 'Settings', '#/emergency': 'Emergency mode',
+      '#/admin': 'Admin', '#/admin/overview': 'Admin Overview', '#/admin/users': 'User Management',
+      '#/admin/doctors': 'Doctor Management', '#/admin/stores': 'Store Management',
+      '#/admin/tickets': 'Tickets & Appointments', '#/admin/feedback': 'User Feedback',
+      '#/admin/system': 'System & Sessions',
     };
     let activeBtn = null;
     document.querySelectorAll('.nav-item[data-h]').forEach(b => {
@@ -502,10 +555,13 @@ const App = {
     // Route to appropriate portal
     if (hash.startsWith('#/doctor/')) return this.routeDoctor();
     if (hash.startsWith('#/store-owner/')) return this.routeStoreOwner();
+    if (hash.startsWith('#/admin')) return this.routeAdmin();
 
     // Patient routes
     if (!this.user) return this.routeAuth();
-    if (!document.querySelector('.shell')) this.renderShell();
+    // Switch from admin shell back to patient shell if needed
+    if (document.querySelector('.adm-sidebar')) this.renderShell();
+    else if (!document.querySelector('.shell')) this.renderShell();
     this.activeNav();
     const rawName = hash.replace(/^#\//, '').split('?')[0] || 'dashboard';
     // `#/consult/room/<id>` → the consult-room view (it parses the id from the hash itself)
@@ -573,6 +629,41 @@ const App = {
       if (my !== this._navId) return;
       console.error(e);
       if (/sign in/i.test(e.message)) { this.storeOwner = null; return this.routeStoreOwnerAuth(); }
+      view.innerHTML = `<div class="card empty">Something went wrong: ${esc(e.message)}</div>`;
+    }
+  },
+
+  async routeAdmin() {
+    this._navId = (this._navId || 0) + 1;
+    const my = this._navId;
+    // Client-side guard: must be logged in AND admin
+    if (!this.user) return this.routeAuth();
+    if (!this.user.isAdmin) {
+      toast('Admin access required.', 'err');
+      location.hash = '#/dashboard';
+      return this.route();
+    }
+    // Render admin shell if not already showing
+    if (!document.querySelector('.adm-sidebar')) this.renderAdminShell();
+    this.activeNav();
+    const rawName = (location.hash || '#/admin/overview').replace(/^#\//, '').split('?')[0];
+    const name = rawName.replace(/\//g, '-'); // admin/overview → admin-overview
+    const view = document.getElementById('view');
+    const fn = VIEWS[name];
+    if (!fn) { view.innerHTML = '<div class="empty">Page not found</div>'; return; }
+    view.innerHTML = `<div class="skel-load">
+      <div class="skel" style="height:64px"></div>
+      <div class="grid g4"><div class="skel" style="height:88px"></div><div class="skel" style="height:88px"></div><div class="skel" style="height:88px"></div><div class="skel" style="height:88px"></div></div>
+      <div class="skel" style="height:220px"></div>
+    </div>`;
+    try {
+      await fn(view);
+      if (my !== this._navId) return;
+      window.scrollTo(0, 0);
+    } catch (e) {
+      if (my !== this._navId) return;
+      console.error(e);
+      if (/sign in/i.test(e.message)) { this.user = null; return this.routeAuth(); }
       view.innerHTML = `<div class="card empty">Something went wrong: ${esc(e.message)}</div>`;
     }
   }

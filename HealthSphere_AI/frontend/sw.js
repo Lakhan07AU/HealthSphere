@@ -7,7 +7,7 @@
    NOTE: cached API responses live in this browser's Cache Storage. On a
    shared device, use the browser profile per person (same rule as passwords). */
 
-const STATIC_CACHE = 'hs-static-v2';
+const STATIC_CACHE = 'hs-static-v3';
 const API_CACHE = 'hs-api-v1';
 const OFFLINE_CORE = ['/', '/index.html'];
 
@@ -51,20 +51,19 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Shell + navigations: cache first, refresh in background.
+  // Shell + navigations: network-first (so new builds and offline both work).
   if (request.mode === 'navigate' || isStaticAsset(url)) {
     event.respondWith(
-      caches.match(request, { ignoreSearch: request.mode === 'navigate' }).then(hit => {
-        const net = fetch(request).then(res => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(STATIC_CACHE).then(cache => cache.put(request, copy)).catch(() => {});
-          }
-          return res;
-        }).catch(() => null);
-        if (request.mode === 'navigate') return net.then(r => r || hit || offlinePage());
-        return hit || net.then(r => r || Promise.reject(new Error('offline')));
-      })
+      fetch(request).then(res => {
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(STATIC_CACHE).then(cache => cache.put(request, copy)).catch(() => {});
+        }
+        return res;
+      }).catch(() =>
+        caches.match(request, { ignoreSearch: request.mode === 'navigate' })
+          .then(hit => hit || (request.mode === 'navigate' ? offlinePage() : Promise.reject(new Error('offline'))))
+      )
     );
   }
 });

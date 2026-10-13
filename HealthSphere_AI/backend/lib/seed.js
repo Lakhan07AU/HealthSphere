@@ -37,7 +37,15 @@ Blood Pressure : 138/88
 Please consult your physician for interpretation.`;
 
 export function ensureSeed() {
-  if (db.users.length) return;
+  // Admin account (must exist before demo seed check)
+  if (!db.users.find(u => u.email === 'admin123@healthsphere.ai')) {
+    registerUser({ name: 'Admin', email: 'admin123@healthsphere.ai', password: 'Admin@1234' });
+    persist();
+    console.log('Seeded admin account → admin123@healthsphere.ai / Admin@1234');
+  }
+
+  // Skip demo seed if demo user already exists
+  if (db.users.find(u => u.email === 'demo@healthsphere.ai')) return;
   const user = registerUser({ name: 'Arjun Mehta', email: 'demo@HealthSphere.ai', password: 'demo1234' });
   const id = user.id;
 

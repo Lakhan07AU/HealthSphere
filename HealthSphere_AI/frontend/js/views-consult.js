@@ -105,16 +105,17 @@ VIEWS.consult = async function (container) {
 
   function ticketRow(t) {
     const statusMap = {
-      pending: { label: 'Seeking Doctor', cls: 'warn', icon: '⏳' },
-      accepted: { label: 'Accepted', cls: 'ok', icon: '✅' },
-      rejected: { label: 'Rejected', cls: 'bad', icon: '❌' },
-      expired: { label: 'Expired', cls: 'neutral', icon: '⏰' }
+      pending: { label: 'Seeking Doctor', cls: 'warn', icon: 'clock' },
+      accepted: { label: 'Accepted', cls: 'ok', icon: 'check-circle' },
+      rejected: { label: 'Rejected', cls: 'bad', icon: 'x-circle' },
+      expired: { label: 'Expired', cls: 'neutral', icon: 'clock' }
     };
     const st = statusMap[t.status] || statusMap.pending;
     const doctorInfo = t.doctorInfo;
     const timeLeft = t.expiresAt && t.status === 'pending'
       ? Math.max(0, Math.round((new Date(t.expiresAt) - new Date()) / 60000))
       : null;
+    const ic = window.icon || function(){ return ''; };
 
     return `
       <div class="ticket-row" style="border-left:3px solid ${t.status === 'accepted' ? 'var(--green-600)' : t.status === 'pending' ? 'var(--yellow-500)' : 'var(--ink-faint)'}">
@@ -122,7 +123,7 @@ VIEWS.consult = async function (container) {
           <div>
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
               <b style="font-size:13px">${esc(t.specialization)}</b>
-              <span class="chip ${st.cls}" style="font-size:9px">${st.icon} ${st.label}</span>
+              <span class="chip ${st.cls} ic-lbl" style="font-size:9px">${ic(st.icon, 11)} ${st.label}</span>
               ${timeLeft != null ? `<span style="font-size:11px;color:var(--ink-faint)">${timeLeft} min left</span>` : ''}
             </div>
             <div class="page-sub" style="font-size:12px">${t.symptoms ? esc(t.symptoms) : '<em>No symptoms</em>'}</div>
@@ -131,15 +132,16 @@ VIEWS.consult = async function (container) {
               : ''}
             <div style="font-size:11px;color:var(--ink-faint);margin-top:2px">${new Date(t.createdAt).toLocaleString()}</div>
             ${doctorInfo ? `
-              <div style="margin-top:6px;padding:6px 8px;background:var(--bg-light, #f0fdf4);border-radius:6px;font-size:12px">
-                <span style="color:var(--green-600);font-weight:600">👨‍⚕️ Dr. ${esc(doctorInfo.name)}</span>
+              <div style="margin-top:6px;padding:6px 8px;background:var(--bg-light, #f0fdf4);border-radius:6px;font-size:12px;display:flex;align-items:center;gap:6px">
+                <span style="color:var(--green-600)">${ic('user-check', 14)}</span>
+                <span style="color:var(--green-600);font-weight:600">Dr. ${esc(doctorInfo.name)}</span>
                 <span style="color:var(--ink-soft)"> · ${esc(doctorInfo.qualification)} · ${esc(doctorInfo.specialization)}</span>
               </div>
             ` : ''}
           </div>
           <div class="row" style="gap:6px">
             ${t.status === 'accepted' && t.sessionId
-              ? `<a class="btn sm" href="#/consult/room/${esc(t.sessionId)}">💬 Chat Now</a>`
+              ? `<a class="btn sm ic-lbl" href="#/consult/room/${esc(t.sessionId)}">${ic('message', 13)} Chat Now</a>`
               : ''}
           </div>
         </div>
@@ -148,16 +150,17 @@ VIEWS.consult = async function (container) {
 
   function apptRow(a, isUpcoming) {
     const doctorInfo = a.doctorInfo;
+    const ic = window.icon || function(){ return ''; };
     return `
       <div class="appointment-card" style="border-left:3px solid ${isUpcoming ? 'var(--primary)' : 'var(--ink-faint)'}">
         <div class="spread">
           <div>
-            <b style="font-size:13px">👨‍⚕️ Dr. ${esc(doctorInfo?.name || a.doctorName)}</b>
+            <b style="font-size:13px;display:flex;align-items:center;gap:6px">${ic('user-check', 14, 'primary')} Dr. ${esc(doctorInfo?.name || a.doctorName)}</b>
             ${doctorInfo ? `<div style="font-size:11px;color:var(--ink-soft);margin-top:1px">${esc(doctorInfo.specialization)} · ${esc(doctorInfo.qualification)}</div>` : ''}
             <div class="page-sub" style="font-size:12px;margin-top:2px">${new Date(a.confirmedSlot).toLocaleString()}</div>
           </div>
           <div class="row">
-            ${isUpcoming && a.sessionLink ? `<a class="btn sm" href="#/consult/room/${esc(a.sessionId || '')}">💬 Join Chat</a>` : ''}
+            ${isUpcoming && a.sessionLink ? `<a class="btn sm ic-lbl" href="#/consult/room/${esc(a.sessionId || '')}">${ic('message', 13)} Join Chat</a>` : ''}
             <span class="chip ${a.status === 'confirmed' ? 'ok' : 'neutral'}">${esc(a.status)}</span>
           </div>
         </div>

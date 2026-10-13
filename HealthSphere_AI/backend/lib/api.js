@@ -8,7 +8,7 @@ import {
   changePassword, audit, isAdmin
 } from './auth.js';
 import { loginRateLimit } from './ratelimit.js';
-import { processDocument, explainReport, flagFor } from './extraction.js';
+import { processDocument, explainReport, flagFor, structuredFromText } from './extraction.js';
 import { buildSeries, analyzeSeries, labelOf } from './trends.js';
 import { getInsights, emergencyCard } from './insights.js';
 import { createReminder, reminderAction, syncAutoReminders } from './reminders.js';
@@ -17,6 +17,8 @@ import { generateActivityPlan, generateNutritionPlan, weeklyInsight, MEALS, getM
 import { CITIES, searchFacilities, fetchNearbyLive, geocodePlace } from './hospitals.js';
 import { askAssistant } from './assistant.js';
 import { uid, todayISO } from './util.js';
+import { publicTerms, TERMS_VERSION } from './terms.js';
+import { TERMS_BODY } from './terms-text.js';
 import { doctorRoutes } from './api-doctor.js';
 import { storeRoutes } from './api-store.js';
 import { admin2Routes } from './api-admin2.js';
@@ -56,13 +58,25 @@ function checkLoginRate(req, res) {
 route('POST', /^\/api\/auth\/register$/, (req, res, p) => {
   if (!checkLoginRate(p.req, res)) return;
   try {
-    const user = registerUser(p.body || {});
+    // Stamp request metadata onto the consent payload for the audit record.
+    const body = {
+      ...(p.body || {}),
+      ip: req.socket?.remoteAddress || p.body?.ip || '',
+      userAgent: req.headers?.['user-agent'] || p.body?.userAgent || ''
+    };
+    const user = registerUser(body);
     initUserData(user.id);
     audit(user.id, 'account_created');
+    audit(user.id, 'terms_accepted', `v${TERMS_VERSION}`);
     const { token } = loginUser({ email: p.body.email, password: p.body.password });
     setAuth(res, token);
     ok(res, { user: pub(user), token, isAdmin: isAdmin(user) });
   } catch (e) { bad(res, e); }
+}, { auth: false });
+
+/* Public: current Terms metadata + full clause text (for the consent modal). */
+route('GET', /^\/api\/terms$/, (req, res) => {
+  ok(res, { ...publicTerms(), body: TERMS_BODY });
 }, { auth: false });
 
 route('POST', /^\/api\/auth\/login$/, (req, res, p) => {
@@ -296,21 +310,53 @@ function normalizeCond(n) {
 }
 
 /* ---------- FAMILY HISTORY ---------- */
+const FAM_RELATIONS = ['Father', 'Mother', 'Brother', 'Sister', 'Son', 'Daughter', 'Grandfather', 'Grandmother', 'Uncle', 'Aunt', 'Other'];
+
+function famById(userId, id) {
+  return coll('families', userId).find(x => x.id === id);
+}
+
+// Validate that `relationTo` points at a real member (or 'you') and that linking
+// `selfId` to it would not create a cycle (A→B→…→A). Cycles would make the
+// generation math and tree layout unsolvable, so we reject them at write time.
+function normalizeRelationTo(userId, raw, selfId) {
+  const v = String(raw ?? 'you').trim() || 'you';
+  if (v === 'you') return 'you';
+  if (selfId && v === selfId) throw new Error('A person cannot be linked to themselves.');
+  if (!famById(userId, v)) throw new Error('The person this relative is linked to was not found. Re-select and try again.');
+  // Walk up the anchor chain from the proposed parent; if we ever reach selfId,
+  // linking would close a cycle.
+  let cur = v, steps = 0;
+  while (cur && cur !== 'you' && steps < 200) {
+    if (cur === selfId) throw new Error('That link would create a loop in the family tree. Pick a different person.');
+    const node = famById(userId, cur);
+    if (!node) break;
+    cur = node.relationTo || 'you';
+    steps++;
+  }
+  return v;
+}
+
 route('GET', /^\/api\/family$/, (req, res, p) => ok(res, { members: coll('families', p.user.id) }));
 
 route('POST', /^\/api\/family$/, (req, res, p) => {
   const b = p.body || {};
   if (!b.relation) return bad(res, new Error('Relationship is required.'));
+  if (!FAM_RELATIONS.includes(b.relation)) return bad(res, new Error('Unknown relationship type.'));
+  let relationTo;
+  try { relationTo = normalizeRelationTo(p.user.id, b.relationTo, null); }
+  catch (e) { return bad(res, e); }
   const m = {
     id: uid('fam'),
-    relation: b.relation, name: b.name || '', ageOrYear: b.ageOrYear || '',
+    relation: b.relation, relationTo,
+    name: b.name || '', ageOrYear: b.ageOrYear || '',
     conditions: Array.isArray(b.conditions) ? b.conditions : [],
     surgeries: arr(b.surgeries), cancerHistory: !!b.cancerHistory,
     geneticConditions: arr(b.geneticConditions), events: [], notes: b.notes || '',
     recordedAt: new Date().toISOString()
   };
   coll('families', p.user.id).push(m);
-  audit(p.user.id, 'family_member_added', m.relation);
+  audit(p.user.id, 'family_member_added', `${m.relation}${relationTo !== 'you' ? ' → ' + relationTo : ''}`);
   persist();
   refreshAutoReminders(p.user);
   ok(res, { member: m });
@@ -319,15 +365,34 @@ route('POST', /^\/api\/family$/, (req, res, p) => {
 route('PUT', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
   const m = coll('families', p.user.id).find(x => x.id === p.params[0]);
   if (!m) return bad(res, new Error('Not found'), 404);
-  Object.assign(m, pick(p.body, ['relation', 'name', 'ageOrYear', 'conditions', 'surgeries', 'geneticConditions', 'notes']));
-  if ('cancerHistory' in (p.body || {})) m.cancerHistory = !!p.body.cancerHistory;
+  const b = p.body || {};
+  if ('relation' in b && !FAM_RELATIONS.includes(b.relation)) return bad(res, new Error('Unknown relationship type.'));
+  Object.assign(m, pick(b, ['relation', 'name', 'ageOrYear', 'conditions', 'surgeries', 'geneticConditions', 'notes']));
+  if ('relationTo' in b) {
+    try { m.relationTo = normalizeRelationTo(p.user.id, b.relationTo, m.id); }
+    catch (e) { return bad(res, e); }
+  } else if (!m.relationTo) m.relationTo = 'you';
+  if ('cancerHistory' in b) m.cancerHistory = !!b.cancerHistory;
   persist();
   ok(res, { member: m });
 });
 
 route('DELETE', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
-  db.families[p.user.id] = coll('families', p.user.id).filter(x => x.id !== p.params[0]);
+  const id = p.params[0];
+  const list = coll('families', p.user.id);
+  const target = list.find(x => x.id === id);
+  if (!target) return bad(res, new Error('Not found'), 404);
+  // Re-anchor anyone linked to the removed person up to the removed person's own
+  // anchor (or 'you'), so subtrees stay attached instead of silently teleporting
+  // to the center and scrambling the tree.
+  const newAnchor = target.relationTo || 'you';
+  for (const x of list) {
+    if (x.relationTo === id) x.relationTo = newAnchor;
+  }
+  db.families[p.user.id] = list.filter(x => x.id !== id);
+  audit(p.user.id, 'family_member_removed', target.relation || target.name || id);
   persist();
+  refreshAutoReminders(p.user);
   ok(res, { ok: true });
 });
 
@@ -367,9 +432,12 @@ route('POST', /^\/api\/reports$/, async (req, res, p) => {
   if (!b.filename || !b.dataBase64) return bad(res, new Error('filename and dataBase64 are required'));
   let buffer;
   try { buffer = Buffer.from(b.dataBase64, 'base64'); } catch { return bad(res, new Error('Invalid base64 payload')); }
+  // Text recognized in the browser (images / scanned PDFs) rides along with the
+  // upload so extraction runs on real content instead of an empty string.
+  const ocrText = typeof b.ocrText === 'string' ? b.ocrText.slice(0, 100000) : '';
 
   const out = processDocument({ filename: b.filename, mime: b.mime || guessMime(b.filename), size: buffer.length, buffer },
-    { sex: objColl('profiles', p.user.id).sex, fallbackDate: todayISO() });
+    { sex: objColl('profiles', p.user.id).sex, fallbackDate: todayISO(), ocrText });
 
   const report = {
     id: uid('rep'), filename: sanitizeName(b.filename), storedName: null, mime: b.mime || 'application/pdf',
@@ -377,6 +445,7 @@ route('POST', /^\/api\/reports$/, async (req, res, p) => {
     status: out.error ? 'failed' : 'processed',
     pipeline: out.stages || [], structured: out.structured || { tests: [] }, summaryText: ''
   };
+  if (ocrText) report.ocrText = ocrText.slice(0, 30000);
 
   if (out.error) { persist(); return bad(res, new Error(out.stages.at(-1).detail)); }
 
@@ -425,6 +494,37 @@ route('POST', /^\/api\/reports\/manual$/, (req, res, p) => {
   audit(p.user.id, 'report_manual_entry');
   persist();
   ok(res, { report });
+});
+
+// Re-run extraction on corrected/recognized text (the "re-extract" button under
+// the OCR text in the report modal). Replaces this report's earlier values.
+route('POST', /^\/api\/reports\/([\w-]+)\/reextract$/, (req, res, p) => {
+  const r = coll('reports', p.user.id).find(x => x.id === p.params[0]);
+  if (!r) return bad(res, new Error('Report not found'), 404);
+  const text = String(p.body?.text || '').trim();
+  if (text.length < 5) return bad(res, new Error('Provide the recognized text to extract from.'));
+
+  r.ocrText = text.slice(0, 30000);
+  const structured = structuredFromText(text, {
+    sex: objColl('profiles', p.user.id).sex,
+    fallbackDate: r.structured?.reportDate || todayISO()
+  });
+  r.structured = structured;
+  r.summaryText = explainReport(structured, {});
+  for (const st of (r.pipeline || [])) {
+    if (st.stage === 'Medical entity extraction') {
+      st.status = structured.tests.length ? 'ok' : 'warn';
+      st.detail = structured.tests.length
+        ? `${structured.tests.length} analyte(s) recognized from your corrected text`
+        : 'No known analytes auto-detected — manual review suggested';
+    }
+  }
+  // Swap out this report's earlier metrics so corrections fully take effect.
+  db.metrics[p.user.id] = coll('metrics', p.user.id).filter(m => m.source !== `report:${r.id}`);
+  mergeExtractedMetrics(p.user.id, r);
+  audit(p.user.id, 'report_reextracted', `${r.filename} — ${structured.tests.length} analyte(s)`);
+  persist();
+  ok(res, { report: pubReport(r) });
 });
 
 route('DELETE', /^\/api\/reports\/([\w-]+)$/, async (req, res, p) => {

@@ -1,0 +1,278 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+
+env:
+  NODE_VERSION: '20'
+  PROJECT_DIR: './HealthSphere_AI/backend'
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & TypeCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ env.PROJECT_DIR }}
+      
+      - name: Run ESLint
+        run: npx eslint . --ext .js,.mjs --max-warnings 0
+        working-directory: ${{ env.PROJECT_DIR }}
+      
+      - name: Check formatting (Prettier)
+        run: npx prettier --check .
+        working-directory: ${{ env.PROJECT_DIR }}
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ env.PROJECT_DIR }}
+      
+      - name: Start test database (Supabase local)
+        run: |
+          docker run -d --name test-db \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=healthsphere_test \
+            -p 5432:5432 \
+            pgvector/pgvector:pg16
+          sleep 5
+      
+      - name: Run migrations
+        run: |
+          export SUPABASE_DB_URL="postgresql://postgres:postgres@localhost:5432/healthsphere_test"
+          node scripts/migrate-to-postgres.mjs
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          SUPABASE_DB_URL: postgresql://postgres:postgres@localhost:5432/healthsphere_test
+      
+      - name: Run unit tests
+        run: npm test
+        working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          SUPABASE_DB_URL: postgresql://postgres:postgres@localhost:5432/healthsphere_test
+          NODE_ENV: test
+      
+      - name: Cleanup test database
+        if: always()
+        run: docker rm -f test-db || true
+
+  accessibility:
+    name: Accessibility Audit
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+      
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ env.PROJECT_DIR }}
+      
+      - name: Build frontend (if needed)
+        run: |
+          # No build step for vanilla JS, but verify files exist
+          ls -la frontend/js/*.js | wc -l
+      
+      - name: Start preview server
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          node server.js &
+          SERVER_PID=$!
+          sleep 3
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+        shell: bash
+      
+      - name: Run axe-core accessibility audit
+        run: |
+          npx @axe-core/cli http://localhost:3000 \
+            --save \
+            --exit \
+            --tags wcag2a,wcag2aa,best-practice \
+            --reporter json > accessibility-report.json || true
+        working-directory: ${{ env.PROJECT_DIR }}
+      
+      - name: Upload accessibility report
+        uses: actions/upload-artifact@v4
+        with:
+          name: accessibility-report
+          path: ${{ env.PROJECT_DIR }}/accessibility-report.json
+      
+      - name: Stop preview server
+        if: always()
+        run: kill $SERVER_PID || true
+        shell: bash
+
+  security-scan:
+    name: Security Scan (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Start preview server
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          node server.js &
+          SERVER_PID=$!
+          sleep 3
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+        shell: bash
+      
+      - name: Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+      
+      - name: Stop preview server
+        if: always()
+        run: kill $SERVER_PID || true
+        shell: bash
+
+  load-test:
+    name: Load Test (k6)
+    runs-on: ubuntu-latest
+    needs: [test, accessibility, security-scan]
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run k6 load test
+        uses: grafana/k6-action@v0.2.0
+        with:
+          filename: scripts/load-test.js
+          env: |
+            BASE_URL=${{ secrets.STAGING_URL }}
+            TEST_DURATION=5m
+            VUS=100
+        # Only run on manual dispatch or main branch
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [test, accessibility, security-scan]
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'workflow_dispatch'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Railway/Render
+        run: |
+          # Example for Railway
+          curl -X POST "https://railway.app/api/v1/projects/${{ secrets.RAILWAY_PROJECT_ID }}/deploy" \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"branch": "develop"}'
+        # Or use Render deploy hook
+        # curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
+      
+      - name: Wait for deployment
+        run: sleep 60
+      
+      - name: Health check
+        run: |
+          for i in {1..10}; do
+            if curl -f "${{ secrets.STAGING_URL }}/api/health"; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Health check failed"
+          exit 1
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [test, accessibility, security-scan, load-test, deploy-staging]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Production
+        run: |
+          # Railway production deploy
+          curl -X POST "https://railway.app/api/v1/projects/${{ secrets.RAILWAY_PROJECT_ID }}/deploy" \
+            -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"branch": "main"}'
+        # Or Vercel: npx vercel --prod --token=${{ secrets.VERCEL_TOKEN }}
+      
+      - name: Wait for deployment
+        run: sleep 60
+      
+      - name: Production health check
+        run: |
+          for i in {1..10}; do
+            if curl -f "https://healthsphere.ai/api/health"; then
+              echo "Production health check passed"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Production health check failed"
+          exit 1
+      
+      - name: Notify team
+        run: |
+          curl -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"text": "🚀 HealthSphere AI deployed to production successfully!"}'
+
+  notify-failure:
+    name: Notify on Failure
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, test, accessibility, security-scan, load-test, deploy-staging, deploy-production]
+    if: failure()
+    steps:
+      - name: Send failure notification
+        run: |
+          curl -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \"❌ HealthSphere AI pipeline failed: ${{ github.workflow }} - ${{ github.job }}\"}"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true

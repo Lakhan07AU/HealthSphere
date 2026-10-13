@@ -10,32 +10,32 @@ import { num } from './util.js';
    ============================================================ */
 
 export const TEST_LIBRARY = {
-  hba1c:            { name: 'HbA1c', unit: '%', refLow: 4.0, refHigh: 5.7, category: 'Metabolic', aliases: ['hba1c', 'hb a1c', 'glycated haemoglobin', 'glycosylated hemoglobin', 'a1c'] },
-  glucose_fasting:  { name: 'Fasting blood glucose', unit: 'mg/dL', refLow: 70, refHigh: 99, category: 'Metabolic', aliases: ['fasting (?:blood )?glucose', 'glucose fasting', 'fasting plasma glucose', 'fbs', 'fbg'] },
-  glucose_random:   { name: 'Random blood glucose', unit: 'mg/dL', refLow: 70, refHigh: 140, category: 'Metabolic', aliases: ['random blood glucose', 'postprandial glucose', 'pp glucose', 'rbs'] },
+  hba1c:            { name: 'HbA1c', unit: '%', refLow: 4.0, refHigh: 5.7, category: 'Metabolic', aliases: ['\\bhba[1li]c\\b', '\\bhb\\s*a\\s*1c\\b', 'glycated\\s+haemoglobin', 'glycosylated\\s+hemoglobin', '\\ba1c\\b'] },
+  glucose_fasting:  { name: 'Fasting blood glucose', unit: 'mg/dL', refLow: 70, refHigh: 99, category: 'Metabolic', aliases: ['fasting (?:blood )?glucose', 'glucose fasting', 'fasting plasma glucose', '\\bfbs\\b', '\\bfbg\\b'] },
+  glucose_random:   { name: 'Random blood glucose', unit: 'mg/dL', refLow: 70, refHigh: 140, category: 'Metabolic', aliases: ['random blood glucose', 'postprandial glucose', 'pp glucose', '\\brbs\\b'] },
   total_cholesterol:{ name: 'Total cholesterol', unit: 'mg/dL', refLow: 100, refHigh: 200, category: 'Lipid', aliases: ['total cholesterol', 'cholesterol total', 'serum cholesterol'] },
-  ldl:              { name: 'LDL cholesterol', unit: 'mg/dL', refLow: 40, refHigh: 100, category: 'Lipid', aliases: ['ldl(?:[- ]cholesterol)?', 'low density lipoprotein'] },
-  hdl:              { name: 'HDL cholesterol', unit: 'mg/dL', refLow: 40, refHigh: 90, category: 'Lipid', lowIsBad: true, aliases: ['hdl(?:[- ]cholesterol)?', 'high density lipoprotein'] },
-  triglycerides:    { name: 'Triglycerides', unit: 'mg/dL', refLow: 40, refHigh: 150, category: 'Lipid', aliases: ['triglycerides?', '\btgs?\b'] },
+  ldl:              { name: 'LDL cholesterol', unit: 'mg/dL', refLow: 40, refHigh: 100, category: 'Lipid', aliases: ['\\bldl\\b(?:[- ]cholesterol)?', 'low density lipoprotein'] },
+  hdl:              { name: 'HDL cholesterol', unit: 'mg/dL', refLow: 40, refHigh: 90, category: 'Lipid', lowIsBad: true, aliases: ['\\bhdl\\b(?:[- ]cholesterol)?', 'high density lipoprotein'] },
+  triglycerides:    { name: 'Triglycerides', unit: 'mg/dL', refLow: 40, refHigh: 150, category: 'Lipid', aliases: ['triglycerides?', '\\btgs?\\b'] },
   bp_systolic:      { name: 'Systolic blood pressure', unit: 'mmHg', refLow: 90, refHigh: 120, category: 'Vitals', aliases: ['systolic'] },
   bp_diastolic:     { name: 'Diastolic blood pressure', unit: 'mmHg', refLow: 60, refHigh: 80, category: 'Vitals', aliases: ['diastolic'] },
   heart_rate:       { name: 'Heart rate', unit: 'bpm', refLow: 60, refHigh: 100, category: 'Vitals', aliases: ['heart rate', 'pulse'] },
-  hemoglobin:       { name: 'Hemoglobin', unit: 'g/dL', refLow: 12, refHigh: 17, category: 'CBC', sexRefs: { male: [13, 17], female: [12, 15] }, aliases: ['haemoglobin', 'hemoglobin', '\bhgb\b', '\dhb\b'] },
-  hematocrit:       { name: 'Hematocrit', unit: '%', refLow: 36, refHigh: 50, category: 'CBC', aliases: ['hematocrit', 'haematocrit', '\bhct\b', 'packed cell volume', '\bpcv\b'] },
-  wbc:              { name: 'WBC count', unit: '/µL', refLow: 4000, refHigh: 11000, category: 'CBC', aliases: ['total leucocyte count', 'total leukocyte count', 'wbc(?: count)?', 'tlc'] },
+  hemoglobin:       { name: 'Hemoglobin', unit: 'g/dL', refLow: 12, refHigh: 17, category: 'CBC', sexRefs: { male: [13, 17], female: [12, 15] }, aliases: ['haemoglobin', 'hemoglobin', '\\bhgb\\b', '\\dhb\\b'] },
+  hematocrit:       { name: 'Hematocrit', unit: '%', refLow: 36, refHigh: 50, category: 'CBC', aliases: ['hematocrit', 'haematocrit', '\\bhct\\b', 'packed cell volume', '\\bpcv\\b'] },
+  wbc:              { name: 'WBC count', unit: '/µL', refLow: 4000, refHigh: 11000, category: 'CBC', aliases: ['total leucocyte count', 'total leukocyte count', '\\bwbc\\b(?: count)?', '\\btlc\\b'] },
   platelets:        { name: 'Platelet count', unit: '/µL', refLow: 150000, refHigh: 450000, category: 'CBC', aliases: ['platelet count', 'platelets'] },
   creatinine:       { name: 'Serum creatinine', unit: 'mg/dL', refLow: 0.6, refHigh: 1.3, category: 'Kidney', aliases: ['creatinine'] },
   urea:             { name: 'Blood urea', unit: 'mg/dL', refLow: 15, refHigh: 45, category: 'Kidney', aliases: ['blood urea', 'serum urea'] },
-  egfr:             { name: 'eGFR', unit: 'mL/min/1.73m²', refLow: 90, refHigh: 999, category: 'Kidney', lowIsBad: true, aliases: ['(?:estimated )?gfr'] },
+  egfr:             { name: 'eGFR', unit: 'mL/min/1.73m²', refLow: 90, refHigh: 999, category: 'Kidney', lowIsBad: true, aliases: ['\\b(?:estimated )?gfr\\b'] },
   uric_acid:        { name: 'Uric acid', unit: 'mg/dL', refLow: 3.5, refHigh: 7.2, category: 'Kidney', aliases: ['uric acid'] },
-  alt:              { name: 'ALT (SGPT)', unit: 'U/L', refLow: 5, refHigh: 40, category: 'Liver', aliases: ['alt', 'sgpt'] },
-  ast:              { name: 'AST (SGOT)', unit: 'U/L', refLow: 5, refHigh: 40, category: 'Liver', aliases: ['ast', 'sgot'] },
+  alt:              { name: 'ALT (SGPT)', unit: 'U/L', refLow: 5, refHigh: 40, category: 'Liver', aliases: ['\\balt\\b', '\\bsgpt\\b'] },
+  ast:              { name: 'AST (SGOT)', unit: 'U/L', refLow: 5, refHigh: 40, category: 'Liver', aliases: ['\\bast\\b', '\\bsgot\\b'] },
   bilirubin_total:  { name: 'Total bilirubin', unit: 'mg/dL', refLow: 0.2, refHigh: 1.2, category: 'Liver', aliases: ['total bilirubin'] },
-  tsh:              { name: 'TSH', unit: 'µIU/mL', refLow: 0.4, refHigh: 4.0, category: 'Thyroid', aliases: ['tsh'] },
+  tsh:              { name: 'TSH', unit: 'µIU/mL', refLow: 0.4, refHigh: 4.0, category: 'Thyroid', aliases: ['\\btsh\\b'] },
   vitamin_d:        { name: 'Vitamin D (25-OH)', unit: 'ng/mL', refLow: 30, refHigh: 100, category: 'Nutrition', lowIsBad: true, aliases: ['vitamin d', '25-?oh vitamin d'] },
-  vitamin_b12:      { name: 'Vitamin B12', unit: 'pg/mL', refLow: 200, refHigh: 900, category: 'Nutrition', lowIsBad: true, aliases: ['vitamin b12', '\bb12\b'] },
-  sodium:           { name: 'Sodium', unit: 'mmol/L', refLow: 135, refHigh: 145, category: 'Electrolytes', aliases: ['(?:serum )?sodium', '\bna\+?\b'] },
-  potassium:        { name: 'Potassium', unit: 'mmol/L', refLow: 3.5, refHigh: 5.1, category: 'Electrolytes', aliases: ['(?:serum )?potassium', '\bk\+?\b'] }
+  vitamin_b12:      { name: 'Vitamin B12', unit: 'pg/mL', refLow: 200, refHigh: 900, category: 'Nutrition', lowIsBad: true, aliases: ['vitamin b12', '\\bb12\\b'] },
+  sodium:           { name: 'Sodium', unit: 'mmol/L', refLow: 135, refHigh: 145, category: 'Electrolytes', aliases: ['(?:serum )?sodium', '\\bna\\+?\\b'] },
+  potassium:        { name: 'Potassium', unit: 'mmol/L', refLow: 3.5, refHigh: 5.1, category: 'Electrolytes', aliases: ['(?:serum )?potassium', '\\bk\\+?\\b'] }
 };
 
 const PLAIN_LANGUAGE = {
@@ -65,6 +65,18 @@ const INJECTION_RE = /(ignore\s+(all\s+|any\s+|previous|prior)|disregard\s+(all|
 
 function aliasRegex(t) {
   return new RegExp(t.aliases.join('|'), 'i');
+}
+
+/** OCR often wraps a label across lines. Turn literal spaces in an alias into
+    \s+ so wrapped labels still match — skipping spaces inside [...] classes. */
+function aliasPattern(alias) {
+  let out = '', inClass = false;
+  for (const ch of alias) {
+    if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    out += (ch === ' ' && !inClass) ? '\\s+' : ch;
+  }
+  return out;
 }
 
 export function normalizeText(raw) {
@@ -133,17 +145,26 @@ export function flagFor(key, value, sex) {
   return flag;
 }
 
+/** OCR-safe number parse: strips thousands separators and fixes the classic
+    scanner confusions (letter O for zero, letter l/I for one). */
+function ocrNum(raw) {
+  const cleaned = String(raw).replace(/[,\s]/g, '').replace(/[Oo]/g, '0').replace(/[lI|]/g, '1');
+  return num(cleaned);
+}
+
 /** Extract structured test results from free text. */
 export function extractEntities(text, sex) {
   const found = [];
   for (const [key, t] of Object.entries(TEST_LIBRARY)) {
+    // Separators tolerated: ":" "=" whitespace or a dash (scanned tables love "-").
+    // The value group also accepts OCR letter/digit confusions, cleaned by ocrNum.
     const re = new RegExp(
-      `(${t.aliases.join('|')})[^\\n:=]{0,40}?[:=\\s]+(?:from\\s+)?([0-9][0-9,]*(?:\\.[0-9]+)?)\\s*(%|mg\\/dL|mmHg|g\\/dL|U\\/L|µIU\\/mL|uIU\\/mL|ng\\/mL|pg\\/mL|mmol\\/L|mEq\\/L|\\/µL|x10\\^?9\\/L|10\\^3\\/µL|million\\/µL|lakhs\\/µL)?`,
+      `(${t.aliases.map(aliasPattern).join('|')})[^\\n:=]{0,40}?[:=\\s\\-–—]+(?:result\\s*[:=]?\\s*)?(?:from\\s+)?([0-9][0-9,OolI]*(?:\\.[0-9OolI]+)?)\\s*(%|mg\\/dL|mmHg|g\\/dL|U\\/L|µIU\\/mL|uIU\\/mL|ng\\/mL|pg\\/mL|mmol\\/L|mEq\\/L|\\/µL|x10\\^?9\\/L|10\\^3\\/µL|million\\/µL|lakhs\\/µL)?`,
       'i'
     );
     const m = text.match(re);
     if (!m) continue;
-    let value = num(m[2]);
+    let value = ocrNum(m[2]);
     if (!Number.isFinite(value)) continue;
     let flag = 'normal';
     const [lo, hi] = refsFor(t, sex);
@@ -209,27 +230,31 @@ export function processDocument({ filename, mime, size, buffer }, ctx = {}) {
 
   let rawText = '';
   let mode = '';
+  // Text recognized in the browser by the OCR step (images, or PDFs without a
+  // text layer) arrives with the upload so the same extraction rules run on it.
+  const ocrText = typeof ctx.ocrText === 'string' ? ctx.ocrText.trim() : '';
   if (/\.pdf$/i.test(filename || '') || (mime === 'application/pdf')) {
     rawText = extractPdfText(buffer);
     mode = rawText ? 'Digital PDF text layer parsed' : 'No text layer found (likely scanned image)';
+    if (!rawText && ocrText) { rawText = ocrText; mode = 'Recognized from the scanned pages (in-browser OCR)'; }
   } else if (/\.(txt|text)$/i.test(filename || '')) {
     rawText = buffer.toString('utf8');
     mode = 'Plain text ingested';
   } else {
-    mode = 'Image OCR simulated — please review values below';
+    rawText = ocrText;
+    mode = ocrText
+      ? `Image text recognized in your browser (OCR) — ${ocrText.split(/\s+/).length} word(s)`
+      : 'No text recognized from this image — please review and enter values manually';
   }
   stages.push({ stage: 'OCR / document parsing', status: rawText ? 'ok' : 'warn', detail: mode });
 
-  const { text, flags } = normalizeText(rawText);
+  const structured = structuredFromText(rawText, ctx);
+  const flags = structured.flags, tests = structured.tests;
   stages.push({
     stage: 'Safety pre-check',
     status: 'ok',
     detail: flags.length ? 'Embedded instructions detected and ignored (prompt-injection guard)' : 'No embedded instruction content honored'
   });
-
-  const reportDate = parseReportDate(text) || ctx.fallbackDate || null;
-  const labName = parseLabName(text);
-  const tests = extractEntities(text, ctx.sex);
 
   stages.push({
     stage: 'Medical entity extraction',
@@ -239,20 +264,28 @@ export function processDocument({ filename, mime, size, buffer }, ctx = {}) {
   stages.push({ stage: 'Value normalization & reference ranges', status: 'ok', detail: `${tests.filter(t => t.flag !== 'normal').length} value(s) outside typical reference band` });
   stages.push({ stage: 'Structured health data', status: 'ok', detail: 'Saved to your health graph' });
 
-  const structured = {
-    reportDate,
-    labName,
-    tests,
-    observations: tests.filter(t => t.flag !== 'normal').map(t => ({ key: t.key, message: observationFor(t) })),
-    flags,
-    extractedAt: new Date().toISOString()
-  };
   return { stages, structured };
 }
 
 function observationFor(t) {
   const dir = t.flag === 'high' ? 'above' : t.flag === 'borderline' ? 'near the upper edge of' : 'below';
   return `${t.name} is ${dir} the typical range (${t.value} ${t.unit}, usual band ${t.refLow}–${t.refHigh}).`;
+}
+
+/** Structured result from recognized text — shared by the upload pipeline and
+    the "re-extract from corrected OCR text" flow, so both produce identical
+    shapes (tests, observations, report date, lab name, safety flags). */
+export function structuredFromText(rawText, ctx = {}) {
+  const { text, flags } = normalizeText(rawText);
+  const tests = extractEntities(text, ctx.sex);
+  return {
+    reportDate: parseReportDate(text) || ctx.fallbackDate || null,
+    labName: parseLabName(text),
+    tests,
+    observations: tests.filter(t => t.flag !== 'normal').map(t => ({ key: t.key, message: observationFor(t) })),
+    flags,
+    extractedAt: new Date().toISOString()
+  };
 }
 
 /**

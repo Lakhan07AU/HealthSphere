@@ -15,7 +15,7 @@ window.Assistant = {
       <section id="ai-panel" style="display:none">
         <header>
           <div><b>HealthSphere Assistant</b><span>Rule-based · reads only your records</span></div>
-          <button id="ai-close" aria-label="Close">✕</button>
+          <button id="ai-close" aria-label="Close">${window.icon ? window.icon('x', 16) : '×'}</button>
         </header>
         <div id="ai-msgs"></div>
         <div id="ai-chips"></div>

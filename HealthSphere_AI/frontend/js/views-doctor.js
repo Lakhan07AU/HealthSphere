@@ -128,26 +128,27 @@ VIEWS['doctor-dashboard'] = async function (container) {
             <div class="page-sub" style="font-size:11px;margin-top:2px">Created ${new Date(t.createdAt).toLocaleString()}</div>
           </div>
           <div class="row" style="gap:6px">
-            <button class="btn sm" data-accept="${t.id}">✅ Accept</button>
-            <button class="btn sm danger-outline" data-reject="${t.id}">❌ Reject</button>
+            <button class="btn sm ic-lbl" data-accept="${t.id}">${window.icon ? window.icon('check', 13) : ''} Accept</button>
+            <button class="btn sm danger-outline ic-lbl" data-reject="${t.id}">${window.icon ? window.icon('x', 13) : ''} Reject</button>
           </div>
         </div>
       </div>`;
   }
 
   function appointmentCard(a, isUpcoming) {
+    const ic = window.icon || function(){ return ''; };
     return `
       <div class="appointment-card" style="border-left:3px solid ${isUpcoming ? 'var(--primary)' : 'var(--ink-faint)'}">
         <div class="spread">
           <div>
-            <b>🧑 ${esc(a.patientName)}</b>
+            <b class="ic-lbl">${ic('user', 14, 'primary')} ${esc(a.patientName)}</b>
             <div class="page-sub" style="font-size:12px;margin-top:2px">
               ${new Date(a.confirmedSlot).toLocaleString()}
             </div>
             ${a.ticketId ? `<div style="font-size:11px;color:var(--ink-faint);margin-top:1px">Ticket: ${esc(a.ticketId)}</div>` : ''}
           </div>
           <div class="row">
-            ${a.status === 'confirmed' && isUpcoming ? `<a class="btn sm" href="#/consult/room/${esc(a.sessionId || '')}">💬 Join Chat</a>` : ''}
+            ${a.status === 'confirmed' && isUpcoming ? `<a class="btn sm ic-lbl" href="#/consult/room/${esc(a.sessionId || '')}">${ic('message', 13)} Join Chat</a>` : ''}
             <span class="chip ${a.status === 'confirmed' ? 'ok' : 'neutral'}">${esc(a.status)}</span>
           </div>
         </div>
@@ -182,7 +183,7 @@ VIEWS['doctor-dashboard'] = async function (container) {
         const r = await api(`/api/doctor/tickets/${ticketId}/accept`, { method: 'POST', body: {} });
         toast('Ticket accepted! Appointment created. You can now chat with the patient.');
         VIEWS['doctor-dashboard'](container);
-      } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '✅ Accept'; }
+      } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.innerHTML = (window.icon ? window.icon('check', 13) + ' ' : '') + 'Accept'; }
     };
   });
 

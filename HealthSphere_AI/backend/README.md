@@ -197,8 +197,10 @@ HealthSphere_AI/
 
 The **Admin Panel** (`#/admin`) is visible only to admins — every `/api/admin/*` route
 is re-checked server-side. Admins are set via the `ADMIN_EMAILS` env var
-(comma-separated); when unset it defaults to `dipinroka24@gmail.com` and the demo
-account. Change it before any real deployment.
+(comma-separated); if unset, it falls back to `DEFAULT_ADMIN_EMAILS` in `lib/auth.js`
+(currently `admin123@healthsphere.ai`). Change it before any real deployment.
+
+**Seeded admin account:** `admin123@healthsphere.ai` / `Admin@1234`
 
 ## ☁️ Deploy (Vercel)
 

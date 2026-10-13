@@ -323,7 +323,7 @@ VIEWS.emergency = async function (container) {
           <span><small style="color:#d99">${new Date(a.ts).toLocaleString()}</small>
             <span class="chip ${a.status === 'cancelled' ? 'neutral' : 'bad'}" style="margin-left:8px">${esc(a.status)}</span><br>
             <small style="color:#e8d5c4;word-break:break-word">${esc(a.message.length > 140 ? a.message.slice(0, 140) + '…' : a.message)}
-            ${a.hasLocation ? ' · 📍' : ''}</small></span>
+            ${a.hasLocation ? ' · <span style="color:#fca5a5">' + (window.icon ? window.icon('map-pin', 11) : 'loc') + '</span>' : ''}</small></span>
           ${a.status === 'active' ? `<button class="btn sm secondary" data-sos-cancel="${esc(a.id)}">Call off</button>` : ''}
         </div>`).join('') : '<div class="sos-empty">No alerts triggered yet</div>'}
     </div>
