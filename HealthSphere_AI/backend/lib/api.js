@@ -9,6 +9,7 @@ import {
 } from './auth.js';
 import { loginRateLimit } from './ratelimit.js';
 import { processDocument, explainReport, flagFor, structuredFromText } from './extraction.js';
+import { recognizeImage } from './ocr-server.js';
 import { buildSeries, analyzeSeries, labelOf } from './trends.js';
 import { getInsights, emergencyCard } from './insights.js';
 import { createReminder, reminderAction, syncAutoReminders } from './reminders.js';
@@ -434,10 +435,21 @@ route('POST', /^\/api\/reports$/, async (req, res, p) => {
   try { buffer = Buffer.from(b.dataBase64, 'base64'); } catch { return bad(res, new Error('Invalid base64 payload')); }
   // Text recognized in the browser (images / scanned PDFs) rides along with the
   // upload so extraction runs on real content instead of an empty string.
-  const ocrText = typeof b.ocrText === 'string' ? b.ocrText.slice(0, 100000) : '';
+  // When the browser sent nothing for an image, one server-side OCR pass runs
+  // as fallback — otherwise photo uploads could never extract anything.
+  let ocrText = typeof b.ocrText === 'string' ? b.ocrText.slice(0, 100000) : '';
+  let ocrSource = ocrText ? 'browser' : null;
+  const mime = b.mime || guessMime(b.filename);
+  const isImage = /^image\//.test(mime || '') || /\.(png|jpe?g)$/i.test(b.filename || '');
+  if (!ocrText && isImage) {
+    try {
+      const r = await recognizeImage(buffer);
+      if (r?.text) { ocrText = r.text.slice(0, 100000); ocrSource = 'server'; }
+    } catch { /* best-effort; upload proceeds so text can be entered manually */ }
+  }
 
-  const out = processDocument({ filename: b.filename, mime: b.mime || guessMime(b.filename), size: buffer.length, buffer },
-    { sex: objColl('profiles', p.user.id).sex, fallbackDate: todayISO(), ocrText });
+  const out = processDocument({ filename: b.filename, mime, size: buffer.length, buffer },
+    { sex: objColl('profiles', p.user.id).sex, fallbackDate: todayISO(), ocrText, ocrSource });
 
   const report = {
     id: uid('rep'), filename: sanitizeName(b.filename), storedName: null, mime: b.mime || 'application/pdf',
@@ -557,7 +569,10 @@ route('GET', /^\/api\/storage$/, (req, res, p) => {
 
 function mergeExtractedMetrics(userId, report) {
   const date = report.structured.reportDate || report.uploadedAt.slice(0, 10);
+  // Low-confidence numbers are displayed for review but never merged into the
+  // health graph — a misread value must not corrupt trends.
   for (const t of report.structured.tests || []) {
+    if (t.confidence === 'low') continue;
     const dup = coll('metrics', userId).some(m => m.key === t.key && m.date === date && Number(m.value) === t.value);
     if (!dup) coll('metrics', userId).push({
       id: uid('met'), key: t.key, value: t.value, unit: t.unit, date,

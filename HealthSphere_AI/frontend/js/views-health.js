@@ -756,11 +756,35 @@ function loadTesseract() {
   tessPromise = new Promise((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-    s.onload = () => (window.Tesseract ? resolve(window.Tesseract) : reject(new Error('OCR engine failed to start')));
+    // A failed load must not poison later attempts: reset so the next
+    // upload (or "Read image again") retries the download fresh.
+    s.onload = () => {
+      if (window.Tesseract) resolve(window.Tesseract);
+      else { tessPromise = null; reject(new Error('OCR engine failed to start')); }
+    };
     s.onerror = () => { tessPromise = null; reject(new Error('OCR engine could not be downloaded (connect to the internet once)')); };
     document.head.appendChild(s);
   });
   return tessPromise;
+}
+// A failed recognition must not poison later attempts either.
+async function ocrImage(file, onProgress) {
+  const T = await loadTesseract().catch(err => { tessPromise = null; throw err; });
+  let src;
+  try {
+    src = await prepareForOcr(file);
+  } catch (err) {
+    throw new Error('Could not read this image file.');
+  }
+  try {
+    const { data } = await T.recognize(src, 'eng', {
+      logger: m => { if (m.status === 'recognizing text') onProgress(m.progress || 0); }
+    });
+    return String(data && data.text || '').replace(/\r/g, '').trim();
+  } catch (err) {
+    tessPromise = null;
+    throw err;
+  }
 }
 
 // Upscale small photos, greyscale and stretch contrast — scanned/paper photos
@@ -791,15 +815,6 @@ async function prepareForOcr(file) {
   }
   c.putImageData(img, 0, 0);
   return cv;
-}
-
-async function ocrImage(file, onProgress) {
-  const T = await loadTesseract();
-  const src = await prepareForOcr(file);
-  const { data } = await T.recognize(src, 'eng', {
-    logger: m => { if (m.status === 'recognizing text') onProgress(m.progress || 0); }
-  });
-  return String(data && data.text || '').replace(/\r/g, '').trim();
 }
 
 /* ================= REPORTS ================= */
@@ -956,14 +971,28 @@ async function openReportModal(id) {
     <h3 class="mt">Extracted values</h3>
     ${r.structured?.tests?.length ? `
       <table class="tbl"><thead><tr><th>Test</th><th>Result</th><th>Reference band</th><th>Status</th><th>Trend in your graph</th></tr></thead>
-      <tbody>${r.structured.tests.map(t => `
-        <tr><td>${esc(t.name)}</td>
+      <tbody>${r.structured.tests.map(t => {
+        const band = t.refLow == null && t.refHigh == null ? '—'
+          : t.refLow == null ? `< ${t.refHigh}`
+          : t.refHigh == null ? `> ${t.refLow}`
+          : t.refHigh > 999999 ? 'no upper limit' : `${t.refLow} – ${t.refHigh}`;
+        const review = t.confidence && t.confidence !== 'high'
+          ? ` <span class="chip warn" title="${esc(t.note || 'Needs review — verify against the original document')}">review</span>` : '';
+        const bandTitle = t.refSource === 'lab' ? ' title="The laboratory\u2019s stated interval from this report"' : '';
+        return `
+        <tr><td>${esc(t.name)}${review}</td>
         <td class="num-cell"><b>${t.value}</b> ${esc(t.unit)}</td>
-        <td class="num-cell">${t.refLow > 999999 ? 'no upper limit' : t.refLow + ' – ' + t.refHigh}</td>
+        <td class="num-cell"${bandTitle}>${band}</td>
         <td>${flagChip(t.flag)}</td>
-        <td style="font-size:12.5px;color:var(--ink-soft)">${esc(data.trendNotes[t.key] || '—')}</td></tr>`).join('')}
+        <td style="font-size:12.5px;color:var(--ink-soft)">${esc(data.trendNotes[t.key] || '—')}</td></tr>`; }).join('')}
       </tbody></table>`
       : '<div class="empty">No standard analytes were auto-detected. Use &ldquo;Paste report text&rdquo; to enter values manually.</div>'}
+    ${(r.structured?.unresolved || []).length ? `
+      <div class="card mt" style="box-shadow:none;border-style:dashed">
+        <h3>Seen but unreadable (${r.structured.unresolved.length})</h3>
+        <p class="page-sub">These test names were recognized, but their values were not legible in this document. Correct the OCR text below and re-extract, or add the readings manually.</p>
+        ${r.structured.unresolved.map(u => `<div class="tl-event" style="padding:4px 0"><b>${esc(u.name)}</b> <span class="page-sub">· value not legible</span></div>`).join('')}
+      </div>` : ''}
 
     ${r.ocrText ? `<details class="mt"><summary style="cursor:pointer;font-weight:600;font-size:13px">Text recognized from the document (OCR)</summary>
       <textarea id="fm-ocrtext" rows="6" style="width:100%;margin-top:8px;font-size:12.5px">${esc(r.ocrText)}</textarea>
