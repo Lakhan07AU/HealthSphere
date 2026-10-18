@@ -136,6 +136,7 @@ const GEN_OF = {
 const PARENT_REL = ['Father', 'Mother'];
 const CHILD_REL = ['Son', 'Daughter'];
 const SIB_REL = ['Brother', 'Sister'];
+const GEN_CLASS = { 0: 'ggp', 1: 'gp', 2: 'par', 3: 'sib', 4: 'kid' };
 
 function initialsOf(name) {
   return String(name || '?').split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
@@ -168,7 +169,12 @@ VIEWS.family = async function (container) {
     // Grandparent/grandmother: two generations above the anchor (or above you
     // when unlinked). Uncle/Aunt: same generation as the anchor.
     if (m.relation === 'Grandfather' || m.relation === 'Grandmother') return Math.max(0, base - 2);
-    if (m.relation === 'Uncle' || m.relation === 'Aunt') return base;
+    // Uncle/aunt = sibling of a parent → same generation as the parents. When
+    // anchored directly to "you" that is one row up; when anchored to a parent
+    // it is the parent's own row.
+    if (m.relation === 'Uncle' || m.relation === 'Aunt') {
+      return a && PARENT_REL.includes(a.relation) ? base : Math.max(0, base - 1);
+    }
     // Other/unlinked fallback
     if (!a) return GEN_OF[m.relation] || GEN_YOU;
     return base;
@@ -287,7 +293,13 @@ VIEWS.family = async function (container) {
         <div><label>Name</label><input name="name" value="${esc(m.name || '')}" placeholder="Name"></div>
         <div><label>Relationship${anchor && !forEditId ? ` (to ${esc(anchor.name || anchor.relation)})` : ''}</label>${relationSelectHTML(m.relation, anchor)}</div>
         ${showAnchor ? `<div><label>Linked to</label>${anchorSelectHTML(m.relationTo, forEditId)}</div>` : ''}
+        <div><label>Sex</label><select name="sex">
+          <option value="" ${!m.sex ? 'selected' : ''}>Unknown</option>
+          <option value="male" ${m.sex === 'male' ? 'selected' : ''}>Male</option>
+          <option value="female" ${m.sex === 'female' ? 'selected' : ''}>Female</option>
+        </select></div>
         <div><label>Age / birth year</label><input name="ageOrYear" value="${esc(m.ageOrYear || '')}" placeholder="e.g. 58 or 1968"></div>
+        <div><label>Deceased</label><select name="deceased"><option value="" ${!m.deceased ? 'selected' : ''}>Living</option><option value="1" ${m.deceased ? 'selected' : ''}>Deceased</option></select></div>
         <div><label>Cancer history</label><select name="cancerHistory"><option value="">No</option><option value="1" ${m.cancerHistory ? 'selected' : ''}>Yes</option></select></div>
       </div>
       <div class="mt"></div>
@@ -303,6 +315,7 @@ VIEWS.family = async function (container) {
     const relTo = fd.get('relationTo') || anchorId || 'you';
     return {
       name: fd.get('name'), relation: fd.get('relation'), ageOrYear: fd.get('ageOrYear'),
+      sex: fd.get('sex') || '', deceased: !!fd.get('deceased'),
       cancerHistory: !!fd.get('cancerHistory'), conditions: parseConditions(fd.get('conditionsRaw')),
       geneticConditions: fd.get('geneticConditions'), notes: fd.get('notes'),
       relationTo: relTo
@@ -421,17 +434,21 @@ VIEWS.family = async function (container) {
     };
   }
 
-  /* ---- SVG node-graph tree: layout + edges derived from relationTo chain ---- */
-  const GEN_CLASS = { 0: 'ggp', 1: 'gp', 2: 'par', 3: 'sib', 4: 'kid' };
+
+  /* ---- Pedigree chart: standard medical notation ----
+       Square = male · circle = female · diamond = sex unknown
+       Filled symbol = affected (condition recorded) · diagonal slash = deceased
+       Generations = Roman numerals (left) · individuals numbered left-to-right
+       Arrow = proband (you) · horizontal line = mating · drops = sibship */
+  const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
   const truncate = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s);
 
   function renderGraph() {
     const W = 980, CX = W / 2;
-    const LAYER_Y = { 0: 30, 1: 130, 2: 250, 3: 375, 4: 500 };
-    const H = 570;
+    const LAYER_Y = { 0: 55, 1: 190, 2: 325, 3: 460, 4: 595 };
+    const H = 672;
+    const SYM = 38, HALF = SYM / 2, COUPLE_DX = 56;
 
-    // Build node list. "you" is always gen 3 / center. Each member is placed on
-    // the layer of its derived generation and pushed toward its anchor's x.
     const nodes = [{ id: 'you', m: null, gen: GEN_YOU, x: CX, y: LAYER_Y[GEN_YOU] }];
     const nodeById = { you: nodes[0] };
     for (const m of members) {
@@ -440,141 +457,186 @@ VIEWS.family = async function (container) {
       nodes.push(n); nodeById[m.id] = n;
     }
 
-    // Place each row from the top (ancestors) down, centering each node under
-    // its anchor so edges stay short and the tree reads top-to-bottom. Gen 3
-    // (You + siblings) is laid out first and pinned, so ancestors can aim at
-    // their child and siblings can fan around You without ever landing on it.
     const layers = { 0: [], 1: [], 2: [], 3: [], 4: [] };
     nodes.forEach(n => { if (n.id !== 'you' && layers[n.gen]) layers[n.gen].push(n); });
 
-    // Gen 3: fan siblings around the fixed "You" — alternate left/right, never at center.
+    /* Couples: parent pairs sharing an anchor, and grandparent pairs. */
+    const coupleOf = {};
+    const linkCouples = row => {
+      const byAnchor = {};
+      row.forEach(n => { (byAnchor[n.anchorId] = byAnchor[n.anchorId] || []).push(n); });
+      Object.values(byAnchor).forEach(group => {
+        const parents = group.filter(n => PARENT_REL.includes(n.m.relation));
+        if (parents.length === 2) { coupleOf[parents[0].id] = parents[1].id; coupleOf[parents[1].id] = parents[0].id; }
+        const gps = group.filter(n => n.m.relation === 'Grandfather' || n.m.relation === 'Grandmother');
+        if (gps.length === 2) { coupleOf[gps[0].id] = gps[1].id; coupleOf[gps[1].id] = gps[0].id; }
+      });
+    };
+    linkCouples(layers[1]); linkCouples(layers[2]);
+
+    /* Gen 3: fan siblings around the fixed "You" (never on top of it). */
     const sibs = layers[3];
-    const sibSpacing = Math.min(185, (W - 300) / Math.max(sibs.length, 1));
+    const sibSpacing = Math.min(200, (W - 340) / Math.max(sibs.length, 1));
     sibs.forEach((n, i) => {
-      const side = i % 2 === 0 ? -1 : 1;                       // 1st left, 2nd right, 3rd left…
-      const rank = Math.floor(i / 2) + 1;                      // distance from center
+      const side = i % 2 === 0 ? -1 : 1;
+      const rank = Math.floor(i / 2) + 1;
       n.x = CX + side * rank * sibSpacing;
       n.y = LAYER_Y[3];
     });
 
-    // Ancestors (gen 0,1,2) and descendants (gen 4): center under the anchor.
-    // Process in birth order so a node's anchor x is already settled.
-    const placeRow = (row, baseY) => {
-      // Seed with the anchor's x, then push apart to enforce a readable gap.
-      row.forEach(n => {
-        const a = nodeById[n.anchorId] || nodeById.you;
-        n.x = a.x; n.y = baseY;
-      });
-      resolveOverlaps(row, n => n.x);
-    };
-    placeRow(layers[2], LAYER_Y[2]); // parents first (their anchors are You/sibs, fixed)
-    placeRow(layers[4], LAYER_Y[4]); // children under their parent
-    placeRow(layers[1], LAYER_Y[1]); // grandparents under the parent they link to
-    placeRow(layers[0], LAYER_Y[0]); // great-grandparents under the grandparent
-
-    // Resolve horizontal overlaps on a row: group nodes that were seeded at the
-    // same anchor x, spread each group symmetrically around its anchor (so a
-    // couple straddles their child), then enforce a global min-gap left→right.
-    function resolveOverlaps(row, getX) {
-      if (row.length < 2) return;
-      const GAP = 180;
-      // group by seeded anchor x (within a small epsilon)
-      row.sort((a, b) => getX(a) - getX(b));
-      const groups = [];
-      let cur = [row[0]];
-      for (let i = 1; i < row.length; i++) {
-        if (Math.abs(getX(row[i]) - getX(row[i - 1])) < 1) cur.push(row[i]);
-        else { groups.push(cur); cur = [row[i]]; }
-      }
-      groups.push(cur);
-      // spread each group symmetrically around its shared anchor x
-      groups.forEach(g => {
-        const base = getX(g[0]);
-        g.forEach((n, i) => { n.x = base + (i - (g.length - 1) / 2) * GAP; });
-      });
-      // re-sort and enforce minimum gap left→right so nothing overlaps
-      row.sort((a, b) => getX(a) - getX(b));
-      for (let i = 1; i < row.length; i++) {
-        const need = getX(row[i - 1]) + GAP;
-        if (getX(row[i]) < need) row[i].x += need - getX(row[i]);
-      }
-      // if the row now runs off the right edge, shift the whole row back and
-      // re-enforce gaps from the right so nothing overflows.
-      const over = getX(row[row.length - 1]) - (W - 60);
-      if (over > 0) {
-        for (let i = row.length - 1; i >= 0; i--) {
-          const cap = i === row.length - 1 ? W - 60 : getX(row[i + 1]) - GAP;
-          if (getX(row[i]) > cap) row[i].x = cap;
+    /* Other rows: lay out units (singles and couples) left-to-right, ordered by
+       anchor x so families stay under their anchor. Singles come before couples
+       on anchor ties so an uncle sits beside the parental couple. */
+    const placeRow = row => {
+      if (!row.length) return;
+      const units = [], placed = new Set();
+      for (const n of row) {
+        if (placed.has(n.id)) continue;
+        const mateId = coupleOf[n.id];
+        const mate = mateId ? row.find(x => x.id === mateId) : null;
+        if (mate) {
+          placed.add(n.id); placed.add(mate.id);
+          const [left, right] = (n.m.sex === 'female' || mate.m.sex === 'male') ? [mate, n] : [n, mate];
+          units.push({ type: 'couple', left, right, anchor: (nodeById[n.anchorId] || nodeById.you).x });
         }
       }
-      // clamp into view
-      row.forEach(n => { n.x = Math.max(60, Math.min(W - 60, n.x)); });
+      for (const n of row) {
+        if (placed.has(n.id)) continue;
+        units.push({ type: 'single', node: n, anchor: (nodeById[n.anchorId] || nodeById.you).x });
+      }
+      units.sort((a, b) => (a.anchor - b.anchor) || (a.type === 'single' ? -1 : 1));
+      const widths = units.map(u => (u.type === 'couple' ? 2 * COUPLE_DX + SYM : SYM));
+      const totalW = widths.reduce((s, w) => s + w, 0) + 64 * (units.length - 1);
+      let x = CX - totalW / 2;
+      units.forEach((u, i) => {
+        const c = x + widths[i] / 2;
+        if (u.type === 'couple') {
+          u.left.x = c - COUPLE_DX; u.right.x = c + COUPLE_DX;
+          u.left.y = u.right.y = LAYER_Y[u.left.gen];
+        } else { u.node.x = c; u.node.y = LAYER_Y[u.node.gen]; }
+        x += widths[i] + 64;
+      });
+    };
+    placeRow(layers[2]); // parents (+ uncles/aunts) — anchored to You/sibs
+    placeRow(layers[4]); // children under their parent
+    placeRow(layers[1]); // grandparents under the parent they link to
+    placeRow(layers[0]); // great-grandparents under the grandparent
+
+    /* Who hangs under whom — pedigree semantics rather than raw anchors, so a
+       grandparent connects to their child (your parent) and an uncle to the
+       grandparent of his side. */
+    const fatherNode = members.find(m => m.relation === 'Father') || null;
+    const motherNode = members.find(m => m.relation === 'Mother') || null;
+    const gfNode = members.find(m => m.relation === 'Grandfather') || null;
+    const gmNode = members.find(m => m.relation === 'Grandmother') || null;
+    const surnameOf = n => String(n || '').trim().split(/\s+/).pop()?.toLowerCase() || '';
+
+    function parentOf(m) {
+      const a = anchorOf(m);
+      if (a && a !== 'you') return a;
+      const r = m.relation;
+      if (r === 'Grandfather' || r === 'Grandmother') return null; // top of recorded tree
+      if (r === 'Father') return gfNode || null;                    // father's father (paternal)
+      if (r === 'Mother') return gmNode || null;                    // mother's mother (maternal)
+      if (r === 'Uncle' || r === 'Aunt') {
+        const sn = surnameOf(m.name);                               // side by shared surname
+        if (gfNode && sn && sn === surnameOf(gfNode.name)) return gfNode;
+        if (gmNode && sn && sn === surnameOf(gmNode.name)) return gmNode;
+        return gfNode || gmNode || null;
+      }
+      if (SIB_REL.includes(r)) return fatherNode && motherNode ? 'couple' : (fatherNode || motherNode || 'you');
+      return 'you';                                                 // sons/daughters, others
     }
 
-    /* edges derived from relationTo: parent→child, sibling↔sibling, partner */
-    const edges = [];
-    const edgeKey = new Set();
-    const addEdge = (a, b, kind) => {
-      if (!a || !b || a === b) return;
-      const k = [a.id, b.id].sort().join('|') + ':' + kind;
-      if (edgeKey.has(k)) return;
-      edgeKey.add(k);
-      edges.push({ a, b, kind });
-    };
-    for (const n of nodes) {
-      if (n.id === 'you') continue;
-      const r = n.m.relation;
-      const a = nodeById[n.anchorId] || nodeById.you;
-
-      if (PARENT_REL.includes(r) || CHILD_REL.includes(r)) {
-        // Parent/child: solid line. Orient so the elder is the line start.
-        const parent = n.gen < a.gen ? n : (a.gen < n.gen ? a : n);
-        const child = parent === n ? a : n;
-        addEdge(parent, child, 'solid');
-      } else {
-        // Grandparents, siblings, uncles/aunts, "other": dashed link to anchor.
-        addEdge(n, a, 'dash');
+    /* Sibship drops: vertical from the parent point to a horizontal bar, with a
+       tick down to each child. */
+    const drops = [];
+    const gpCouple = gfNode && gmNode && coupleOf[gfNode.id] ? [gfNode, gmNode] : null;
+    if (gpCouple) {
+      const kids = members.filter(m => parentOf(m) === gfNode || parentOf(m) === gmNode);
+      if (kids.length) drops.push({ x: (nodeById[gfNode.id].x + nodeById[gmNode.id].x) / 2, y: nodeById[gfNode.id].y, children: kids.map(m => nodeById[m.id]) });
+    } else {
+      for (const gp of [gfNode, gmNode]) {
+        if (!gp) continue;
+        const kids = members.filter(m => parentOf(m) === gp);
+        if (kids.length) drops.push({ x: nodeById[gp.id].x, y: nodeById[gp.id].y, children: kids.map(m => nodeById[m.id]) });
       }
     }
-    // Partner (couple) line: link two people of opposite parent-type who share
-    // the same anchor, so a couple shows joined. Applies to your parents AND to
-    // any grandparent couple (two grandparents sharing a parent anchor).
-    for (const gen of [1, 2]) {
-      const row = nodes.filter(n => n.gen === gen && n.m && (PARENT_REL.includes(n.m.relation)));
-      const byAnchor = {};
-      row.forEach(n => { (byAnchor[n.anchorId] = byAnchor[n.anchorId] || []).push(n); });
-      Object.values(byAnchor).forEach(pair => {
-        if (pair.length === 2) addEdge(pair[0], pair[1], 'partner');
-      });
+    const sibKids = members.filter(m => SIB_REL.includes(m.relation));
+    if (fatherNode && motherNode) {
+      drops.push({ x: (nodeById[fatherNode.id].x + nodeById[motherNode.id].x) / 2, y: LAYER_Y[2], children: [...sibKids.map(m => nodeById[m.id]), nodeById.you] });
+    } else if (fatherNode || motherNode) {
+      const p = fatherNode || motherNode;
+      drops.push({ x: nodeById[p.id].x, y: nodeById[p.id].y, children: [...sibKids.map(m => nodeById[m.id]), nodeById.you] });
     }
+    const yourKids = members.filter(m => parentOf(m) === 'you');
+    if (yourKids.length) drops.push({ x: nodeById.you.x, y: nodeById.you.y, children: yourKids.map(m => nodeById[m.id]) });
 
-    const path = (a, b) => {
-      const my = (a.y + b.y) / 2;
-      return `M ${a.x} ${a.y} C ${a.x} ${my}, ${b.x} ${my}, ${b.x} ${b.y}`;
+    const dropPath = d => {
+      const childY = d.children.length ? d.children[0].y : d.y;
+      const barY = d.y + (childY - d.y) * 0.45;
+      const xs = d.children.map(c => c.x);
+      const minX = Math.min(...xs, d.x), maxX = Math.max(...xs, d.x);
+      let p = `M ${d.x} ${d.y + HALF + 2} L ${d.x} ${barY} L ${minX} ${barY} L ${maxX} ${barY}`;
+      for (const c of d.children) p += ` L ${c.x} ${barY} L ${c.x} ${c.y - HALF - 2}`;
+      return p;
     };
 
-    let svg = `<svg class="fam-graph" viewBox="0 0 ${W} ${H}" role="img" aria-label="Family health tree graph">`;
-    svg += '<g class="fg-edges">' + edges.map(e =>
-      `<path class="fg-edge fg-${e.kind}" d="${path(e.a, e.b)}"/>`).join('') + '</g>';
-    svg += '<g class="fg-nodes">';
+    /* Individual numbering: left-to-right within each generation. */
+    const genNum = {};
+    for (const g of [0, 1, 2, 3, 4]) {
+      const rowNodes = g === 3 ? [...layers[3], nodeById.you] : layers[g];
+      [...rowNodes].sort((a, b) => a.x - b.x).forEach((n, i) => { genNum[n.id] = i + 1; });
+    }
+
+    let svg = `<svg class="fam-graph" viewBox="0 0 ${W} ${H}" role="img" aria-label="Family pedigree chart">`;
+    for (const g of [0, 1, 2, 3, 4]) {
+      if (g !== 3 && !layers[g].length) continue; // gen III always shows — the proband is always there
+      svg += `<text class="ped-gen" x="12" y="${LAYER_Y[g] + 4}">${ROMAN[g]}</text>`;
+    }
+    svg += '<g class="ped-edges">';
+    const drawnCouple = new Set();
+    for (const [aId, bId] of Object.entries(coupleOf)) {
+      const key = [aId, bId].sort().join('|');
+      if (drawnCouple.has(key)) continue;
+      drawnCouple.add(key);
+      const a = nodeById[aId], b = nodeById[bId];
+      svg += `<line class="ped-mating" x1="${a.x + (a === b ? 0 : HALF)}" y1="${a.y}" x2="${b.x - HALF}" y2="${b.y}"/>`;
+    }
+    svg += drops.map(d => `<path class="ped-drop" d="${dropPath(d)}"/>`).join('');
+    svg += '</g>';
+
+    svg += '<g class="ped-nodes">';
     for (const n of nodes) {
       const isYou = n.id === 'you';
-      const name = isYou ? selfName : (n.m.name || shortLabel(n.m));
-      const sub = isYou ? 'You' : shortLabel(n.m) + (n.m.ageOrYear ? ` · ${n.m.ageOrYear}` : '');
-      const conds = isYou ? '' : (n.m.conditions || []).slice(0, 2)
-        .map(c => esc(truncate(c.name, 20))).join(' · ');
+      const m = n.m;
+      const name = isYou ? selfName : (m.name || shortLabel(m));
+      const sex = isYou ? '' : (m.sex || '');
+      const affected = !isYou && ((m.conditions || []).length > 0 || m.cancerHistory);
+      const deceased = !isYou && !!m.deceased;
+      const fill = affected ? '#DC2626' : '#FFFFFF';
+      const stroke = affected ? '#991B1B' : '#334155';
+      const shape = sex === 'male'
+        ? `<rect x="${-HALF}" y="${-HALF}" width="${SYM}" height="${SYM}" rx="4" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`
+        : sex === 'female'
+          ? `<circle r="${HALF - 1}" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`
+          : `<path d="M 0 ${-HALF} L ${HALF} 0 L 0 ${HALF} L ${-HALF} 0 Z" fill="${fill}" stroke="${stroke}" stroke-width="2.5"/>`;
+      const slash = deceased ? `<line x1="${-HALF + 2}" y1="${HALF - 2}" x2="${HALF - 2}" y2="${-HALF + 2}" stroke="#334155" stroke-width="2.5"/>` : '';
+      const arrow = isYou ? `<path class="ped-arrow" d="M ${-HALF - 17} 0 l 12 -7 l 0 14 Z"/>` : '';
+      const num = genNum[n.id] ? `<text class="ped-num" text-anchor="middle" y="${-HALF - 8}">${genNum[n.id]}</text>` : '';
+      const sub = isYou ? 'Proband' : shortLabel(m) + (m.ageOrYear ? ` · ${m.ageOrYear}` : '');
+      const conds = isYou ? '' : (m.conditions || []).slice(0, 2)
+        .map(c => esc(truncate(c.name, 18))).join(' · ');
       const quick = `<g class="fg-quick">
-        <g class="fg-qbtn fg-qadd" data-addrel="${esc(n.id)}" transform="translate(-24,-24)" role="button" aria-label="${esc('Add relative of ' + name)}"><title>Add relative</title><circle r="11"/><text text-anchor="middle" dy="4">+</text></g>
-        ${isYou ? '' : `<g class="fg-qbtn fg-qedit" data-editfam="${esc(n.id)}" transform="translate(24,-24)" role="button" aria-label="${esc('Update record of ' + name)}"><title>Update record</title><circle r="11"/><text text-anchor="middle" dy="4">&#9998;</text></g>
-        <g class="fg-qbtn fg-qdel" data-delfam="${esc(n.id)}" transform="translate(24,24)" role="button" aria-label="${esc('Remove ' + name)}"><title>Remove member</title><circle r="11"/><text text-anchor="middle" dy="4">&times;</text></g>`}
+        <g class="fg-qbtn fg-qadd" data-addrel="${esc(n.id)}" transform="translate(-26,-26)" role="button" aria-label="${esc('Add relative of ' + name)}"><title>Add relative</title><circle r="11"/><text text-anchor="middle" dy="4">+</text></g>
+        ${isYou ? '' : `<g class="fg-qbtn fg-qedit" data-editfam="${esc(n.id)}" transform="translate(26,-26)" role="button" aria-label="${esc('Update record of ' + name)}"><title>Update record</title><circle r="11"/><text text-anchor="middle" dy="4">&#9998;</text></g>
+        <g class="fg-qbtn fg-qdel" data-delfam="${esc(n.id)}" transform="translate(26,26)" role="button" aria-label="${esc('Remove ' + name)}"><title>Remove member</title><circle r="11"/><text text-anchor="middle" dy="4">&times;</text></g>`}
       </g>`;
-      svg += `<g class="fg-node${isYou ? ' fg-you' : ''}" transform="translate(${Math.round(n.x)},${n.y})" data-famid="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(isYou ? 'You — select for options' : name + ' — select to update record or add relatives')}">
-        <circle class="fg-halo" r="40"/>
-        <circle class="fg-core fg-${isYou ? 'self' : GEN_CLASS[n.gen] || 'sib'}" r="27"/>
-        <text class="fg-initials" text-anchor="middle" dy="5">${esc(initialsOf(name))}</text>
-        <text class="fg-name" text-anchor="middle" y="48">${esc(truncate(name, 18))}</text>
-        <text class="fg-sub" text-anchor="middle" y="63">${esc(sub)}</text>
-        ${conds ? `<text class="fg-cond" text-anchor="middle" y="78">${conds}</text>` : ''}
+      svg += `<g class="ped-node${isYou ? ' ped-you' : ''}" transform="translate(${Math.round(n.x)},${Math.round(n.y)})" data-famid="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(isYou ? 'You (proband) — select for options' : name + ' — select to update record or add relatives')}">
+        ${shape}${slash}${arrow}${num}
+        <text class="ped-name" text-anchor="middle" y="${HALF + 16}">${esc(truncate(name, 18))}</text>
+        <text class="ped-sub" text-anchor="middle" y="${HALF + 29}">${esc(sub)}</text>
+        ${conds ? `<text class="ped-cond" text-anchor="middle" y="${HALF + 41}">${conds}</text>` : ''}
         ${quick}
       </g>`;
     }
@@ -590,16 +652,26 @@ VIEWS.family = async function (container) {
       <div class="page-sub">Family context powers personalized preventive-care guidance.</div></div></div>
 
     <div class="card mb" id="tree">
-      <div class="spread"><h2 style="padding-bottom:0;border-bottom:none;margin:0">Family health tree</h2>
+      <div class="spread"><h2 style="padding-bottom:0;border-bottom:none;margin:0">Family pedigree chart</h2>
         <div class="fg-legend">
           <span class="fam-stat"><b>${members.length}</b> people</span>
           <span class="fam-stat"><b>${totalConds}</b> conditions</span>
           <span class="fam-stat"><b>${gensCovered}</b> generations</span>
-          <span><i class="fg-dot ggp"></i>Great-grand</span><span><i class="fg-dot gp"></i>Grandparents</span><span><i class="fg-dot par"></i>Parents</span>
-          <span><i class="fg-dot sib"></i>You &amp; siblings</span><span><i class="fg-dot kid"></i>Children</span>
+          <span class="fam-stat"><b>${members.filter(m => (m.conditions || []).length > 0 || m.cancerHistory).length}</b> affected</span>
         </div></div>
-      <div class="fg-hint">Click a person to select them — then update their record or add relatives · hover a node for quick + / ✎ / × actions</div>
+      <div class="fg-hint">Standard pedigree notation — squares male · circles female · filled = affected · slash = deceased · Roman numerals = generations · arrow = proband (you). Click a person to select them — then update their record or add relatives · hover a node for quick + / ✎ / × actions</div>
       <div class="fam-graph-wrap">${renderGraph()}</div>
+      <div class="ped-legend">
+        <span class="pl-title">Pedigree key</span>
+        <span><svg width="15" height="15" viewBox="0 0 15 15"><rect x="1.5" y="1.5" width="12" height="12" rx="2" fill="#fff" stroke="#334155" stroke-width="1.6"/></svg>Male</span>
+        <span><svg width="15" height="15" viewBox="0 0 15 15"><circle cx="7.5" cy="7.5" r="6" fill="#fff" stroke="#334155" stroke-width="1.6"/></svg>Female</span>
+        <span><svg width="15" height="15" viewBox="0 0 15 15"><path d="M7.5 1.5 L13.5 7.5 L7.5 13.5 L1.5 7.5 Z" fill="#fff" stroke="#334155" stroke-width="1.6"/></svg>Sex unknown</span>
+        <span><svg width="15" height="15" viewBox="0 0 15 15"><rect x="1.5" y="1.5" width="12" height="12" rx="2" fill="#DC2626"/></svg>Affected</span>
+        <span><svg width="15" height="15" viewBox="0 0 15 15"><rect x="1.5" y="1.5" width="12" height="12" rx="2" fill="#fff" stroke="#334155" stroke-width="1.6"/><line x1="2.5" y1="12.5" x2="12.5" y2="2.5" stroke="#334155" stroke-width="1.6"/></svg>Deceased</span>
+        <span><svg width="19" height="15" viewBox="0 0 19 15"><path d="M1 7.5 L12 2 L12 13 Z" fill="#0F172A"/></svg>Proband (you)</span>
+        <span><svg width="22" height="15" viewBox="0 0 22 15"><line x1="1" y1="7.5" x2="21" y2="7.5" stroke="#334155" stroke-width="2"/></svg>Mating</span>
+        <span><svg width="22" height="15" viewBox="0 0 22 15"><path d="M11 1 L11 7 L1 13 M11 7 L21 13" fill="none" stroke="#334155" stroke-width="2"/></svg>Parent–child</span>
+      </div>
       <div class="fam-bar" id="fam-bar" aria-live="polite"></div>
       ${members.length ? '' : '<div class="empty" style="margin-top:8px">Add family members below — they will appear on the graph automatically</div>'}
     </div>
@@ -611,7 +683,11 @@ VIEWS.family = async function (container) {
         <div class="grid g4">
           <div><label>Name</label><input name="name" placeholder="Name"></div>
           <div><label>Relationship</label><select name="relation" id="add-relation"></select></div>
+          <div><label>Sex</label><select name="sex"><option value="">Unknown</option><option value="male">Male</option><option value="female">Female</option></select></div>
           <div><label>Age / birth year</label><input name="ageOrYear" placeholder="e.g. 58 or 1968"></div>
+        </div>
+        <div class="grid g4 mt">
+          <div><label>Deceased</label><select name="deceased"><option value="">Living</option><option value="1">Deceased</option></select></div>
           <div><label>Cancer history</label><select name="cancerHistory"><option value="">No</option><option value="1">Yes</option></select></div>
         </div>
         <div class="mt"></div>

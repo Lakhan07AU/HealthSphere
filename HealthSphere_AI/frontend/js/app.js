@@ -169,6 +169,8 @@ const App = {
       { label: 'Care', links: [
         ['#/consult', 'Doctors'], ['#/stores', 'Stores'],
         ['#/care', 'Care team'], ['#/hospitals', 'Nearby'], ['#/storage', 'Storage'], ['#/settings', 'Settings']] },
+      { label: 'Learn', links: [
+        ['#/research', 'Research Hub'], ['#/research/diseases', 'Disease Watch']] },
     ];
     const ALL = [...GROUPS.flatMap(g => g.links), ...(this.user?.isAdmin ? [['#/admin/overview', 'Admin']] : [])];
     document.getElementById('app').innerHTML = `
@@ -524,6 +526,10 @@ const App = {
     const NAMES = {
       '#/dashboard': 'Overview', '#/profile': 'Profile', '#/family': 'Family history',
       '#/reports': 'Medical reports', '#/timeline': 'Timeline', '#/insights': 'Insights & risks',
+      '#/research': 'Research Hub', '#/research/diseases': 'Disease & Virus Watch',
+      '#/research/explorer': 'Research Explorer', '#/research/saved': 'Saved Articles',
+      '#/research/preferences': 'My Interests', '#/research/admin/sources': 'Research Sources',
+      '#/research/admin/review': 'Content Review',
       '#/lifestyle': 'Lifestyle', '#/reminders': 'Reminders', '#/consult': 'Consult a doctor',
       '#/stores': 'Medical stores', '#/care': 'Care team', '#/hospitals': 'Nearby care', '#/storage': 'File storage',
       '#/settings': 'Settings', '#/emergency': 'Emergency mode',
@@ -565,9 +571,23 @@ const App = {
     this.activeNav();
     const rawName = hash.replace(/^#\//, '').split('?')[0] || 'dashboard';
     // `#/consult/room/<id>` → the consult-room view (it parses the id from the hash itself)
-    const name = rawName.startsWith('consult/room/') ? 'consult-room' : rawName;
+    // `#/research/article/<id>` → article detail (parses id from the hash itself)
+    const RESEARCH_VIEWS = {
+      'research': 'research',
+      'research/diseases': 'researchDiseases',
+      'research/explorer': 'researchExplorer',
+      'research/saved': 'researchSaved',
+      'research/preferences': 'researchPrefs',
+      'research/admin/sources': 'researchAdminSources',
+      'research/admin/review': 'researchAdminReview'
+    };
+    const name = rawName.startsWith('consult/room/') ? 'consult-room'
+      : rawName.startsWith('research/article/') ? 'research-article'
+      : (RESEARCH_VIEWS[rawName] || rawName);
     const view = document.getElementById('view');
-    const fn = VIEWS[name];
+    const fn = name === 'research-article'
+      ? (c) => VIEWS.researchArticle(c, rawName.split('/')[2])
+      : VIEWS[name];
     if (!fn) { view.innerHTML = '<div class="empty">Page not found</div>'; return; }
     view.innerHTML = `<div class="skel-load">
       <div class="skel" style="height:64px"></div>

@@ -60,3 +60,5 @@ assert.ok(scr.length >= 3, 'screening checklist populated');
 assert.ok(scr.every(s => /doctor|guidance|advice/i.test(s.recommendedReview)), 'screening framed as doctor discussion');
 
 console.log('[PASS] rules.test.mjs — risk signals, safety layer, recommendations OK');
+
+process.exit(0);

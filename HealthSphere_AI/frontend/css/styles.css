@@ -97,7 +97,7 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .signout-btn{background:var(--secondary);border:1px solid var(--border);color:#33465E;font-size:12px;font-weight:700;padding:8px 13px;border-radius:var(--radius-pill);cursor:pointer;font-family:inherit;min-height:36px}
 .signout-btn:hover{color:var(--destructive);border-color:#E5A9A3;background:#FDF1F0}
 /* grouped tab-cluster nav (pyronis pattern) */
-.topnav-links{max-width:1240px;margin:0 auto;display:flex;align-items:center;gap:3px;padding:1px 24px 9px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+.topnav-links{max-width:1240px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:3px;padding:1px 24px 9px;overflow-x:visible}
 .topnav-links::-webkit-scrollbar{display:none}
 .nav-group-label{font-size:9.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted-fg);padding:0 6px 0 10px;font-family:var(--font-display);flex-shrink:0}
 .nav-group-label:first-child{padding-left:0}
@@ -713,6 +713,23 @@ details[open] summary::before{content:'–'}
 .fg-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
 .fg-dot.ggp{background:#A855F7}.fg-dot.gp{background:#7C3AED}.fg-dot.par{background:#1E88E5}.fg-dot.sib{background:#0E7C6B}.fg-dot.kid{background:#F59E0B}
 .fg-hint{font-size:11px;color:var(--muted-fg);margin-top:2px}
+/* ---------- pedigree chart notation ---------- */
+.ped-gen{fill:#64748B;font-size:13px;font-weight:800;font-family:var(--font-display)}
+.ped-mating{stroke:#334155;stroke-width:2;fill:none}
+.ped-drop{stroke:#334155;stroke-width:1.6;fill:none}
+.ped-node{cursor:pointer}
+.ped-node:focus{outline:none}
+.ped-node:focus-visible .ped-name{fill:var(--primary)}
+.ped-node:hover .ped-name{fill:var(--primary)}
+.ped-you .ped-name{fill:var(--primary)}
+.ped-arrow{fill:#0F172A}
+.ped-num{fill:#94A3B8;font-size:10px;font-weight:800}
+.ped-name{fill:#0F172A;font-size:11px;font-weight:800;font-family:var(--font-display);pointer-events:none}
+.ped-sub{fill:#64748B;font-size:9.5px;font-weight:700;pointer-events:none}
+.ped-cond{fill:#DC2626;font-size:9px;font-weight:700;pointer-events:none}
+.ped-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;font-weight:700;color:var(--muted);align-items:center;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}
+.ped-legend span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.ped-legend .pl-title{font-family:var(--font-display);color:#0F172A;font-weight:800;font-size:11.5px}
 .fam-stat{display:inline-flex;align-items:baseline;gap:4px;padding:3px 10px;border-radius:var(--radius-pill);background:var(--secondary);border:1px solid var(--border);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .fam-stat b{font-family:var(--font-display);font-size:12.5px;color:#0F1F33;font-variant-numeric:tabular-nums}
 .fam-bar{display:none;align-items:center;gap:12px;margin-top:12px;padding:10px 14px;border:1px solid var(--border);border-radius:14px;background:linear-gradient(180deg,#F7FAFF,#fff);box-shadow:var(--shadow-xs)}
@@ -958,3 +975,13 @@ svg[aria-hidden="true"][viewBox="0 0 24 24"]{flex-shrink:0;vertical-align:middle
 @media (max-width:640px){
   .adm-chat-msg.from-doctor{margin-left:8px}
 }
+
+/* ---------- Research Hub ---------- */
+.rh-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0}
+.rh-tabs a{padding:9px 16px;font-size:12.5px;font-weight:700;color:var(--muted);border-bottom:2.5px solid transparent;margin-bottom:-1px;text-decoration:none}
+.rh-tabs a.on{color:var(--primary);border-bottom-color:var(--primary)}
+.rh-tabs a:hover{color:#0F1F33}
+.rh-card{padding:16px 18px}
+.rh-card:hover{border-color:#C6D3E4}
+.rh-evidence-note{font-size:10.5px;color:var(--muted);margin-top:4px}
+@media (max-width:720px){.rh-tabs a{padding:8px 10px;font-size:11.5px}}

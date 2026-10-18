@@ -141,3 +141,5 @@ assert.strictEqual(storageBackend(), 'supabase', 'supabase takes priority');
 restore();
 console.log('[PASS] storage.test.mjs — cloudinary branch (mocked) OK');
 console.log('[PASS] storage.test.mjs — all storage tests OK');
+
+process.exit(0);

@@ -8,7 +8,7 @@
     "start": "node server.js --open",
     "dev": "node server.js",
     "reset": "node scripts/reset.mjs",
-    "test": "node tests/extraction.test.mjs && node tests/lft-layout.test.mjs && node tests/trends.test.mjs && node tests/rules.test.mjs && node tests/storage.test.mjs"
+    "test": "node tests/extraction.test.mjs && node tests/lft-layout.test.mjs && node tests/trends.test.mjs && node tests/rules.test.mjs && node tests/storage.test.mjs && node tests/research-schema.test.mjs && node tests/research-normalize.test.mjs && node tests/research-summarize.test.mjs && node tests/research-connectors.test.mjs && node tests/research-api.test.mjs"
   },
   "engines": {
     "node": ">=18"

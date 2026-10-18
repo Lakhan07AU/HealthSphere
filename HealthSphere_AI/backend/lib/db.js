@@ -1,8 +1,11 @@
 ﻿import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+const { Client } = pg;
 
 function defaults() {
   return {
@@ -31,83 +34,273 @@ function defaults() {
   };
 }
 
-/* ---------------- storage backends ----------------
-   1) SUPABASE_DB_URL set → the whole state lives in one jsonb row
-      ("app_state") in a free Supabase Postgres project. Survives
-      serverless cold starts (Vercel /tmp is wiped between invocations).
-   2) otherwise → local data/db.json with atomic writes.
-   Both modes export the exact same surface (db, persist, coll, objColl,
-   DATA_DIR, UPLOAD_DIR), so no other module needs to change. */
+const USER_COLLECTIONS = [
+  'profiles', 'families', 'reports', 'metrics', 'logs', 'plans',
+  'doctors', 'contacts', 'reminders', 'sos', 'audit', 'settings'
+];
+
+const TOP_LEVEL_TABLES = [
+  'users', 'sessions', 'doctorAccounts', 'storeOwnerAccounts',
+  'consultTickets', 'consultAppointments',
+  'consultMessages', 'feedback', 'stores'
+];
 
 let db = defaults();
-let cloudClient = null; // pg Client when running in cloud mode
+let pgClient = null;
+let pgEnabled = false;
 
-if (process.env.SUPABASE_DB_URL) {
+const DATA_DIR = process.env.HealthSphere_DATA_DIR
+  || process.env.DATA_DIR
+  || path.join(ROOT, 'data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
+export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const DB_PATH = path.join(DATA_DIR, 'db.json');
+
+function pgTableName(name) {
+  const map = {
+    doctorAccounts: 'doctor_accounts',
+    storeOwnerAccounts: 'store_owner_accounts',
+    adminAccounts: 'admin_accounts',
+    consultTickets: 'consult_tickets',
+    consultAppointments: 'consult_appointments',
+    consultMessages: 'consult_messages',
+  };
+  return map[name] || name;
+}
+
+/* Map lowercase PG column names back to camelCase JS keys */
+const PG_TO_CAMEL = {
+  passwordsalt: 'passwordSalt',
+  passwordhash: 'passwordHash',
+  createdat: 'createdAt',
+  userid: 'userId',
+  expiresat: 'expiresAt',
+  updatedat: 'updatedAt',
+  storedname: 'storedName',
+  filebackend: 'fileBackend',
+  cloudpublicid: 'cloudPublicId',
+  fileresourcetype: 'fileResourceType',
+  filedata: 'fileData',
+  heightcm: 'heightCm',
+  weightkg: 'weightKg',
+  bloodgroup: 'bloodGroup',
+  foodpreference: 'foodPreference',
+  ageoryear: 'ageOrYear',
+  cancerhistory: 'cancerHistory',
+  geneticconditions: 'geneticConditions',
+  recordedat: 'recordedAt',
+  uploadedat: 'uploadedAt',
+  summarytext: 'summaryText',
+  durationmin: 'durationMin',
+  meetinglink: 'meetingLink',
+  ownername: 'ownerName',
+  storeid: 'storeId',
+  licensenumber: 'licenseNumber',
+  verificationstatus: 'verificationStatus',
+  availabilitystatus: 'availabilityStatus',
+  senderid: 'senderId',
+  senderrole: 'senderRole',
+  useremail: 'userEmail',
+  patientid: 'patientId',
+  doctorid: 'doctorId',
+  ticketid: 'ticketId',
+  scheduledat: 'scheduledAt',
+  meetinglink: 'meetingLink'
+};
+
+function pgRowToCamel(row) {
+  const result = {};
+  for (const [k, v] of Object.entries(row)) {
+    const key = PG_TO_CAMEL[k] || k;
+    result[key] = v;
+  }
+  return result;
+}
+
+/* PostgreSQL folds unquoted identifiers to lowercase (passwordsalt, userid).
+   Convert back to camelCase to match JS object keys. */
+function toCamelCase(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(toCamelCase);
+  const result = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    result[key] = typeof v === 'object' && v !== null ? toCamelCase(v) : v;
+  }
+  return result;
+}
+
+async function connectPostgres() {
+  const client = new Client({
+    host: process.env.PG_HOST || 'localhost',
+    port: Number(process.env.PG_PORT || 5432),
+    user: process.env.PG_USER || 'postgres',
+    password: process.env.PG_PASSWORD || 'postgres',
+    database: process.env.PG_DATABASE || 'healthsphere',
+    ssl: false
+  });
+  await client.connect();
+
+  const schemaPath = path.join(ROOT, 'backend', 'lib', 'schema.sql');
+  if (fs.existsSync(schemaPath)) {
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    await client.query(schemaSql);
+  }
+
+  return client;
+}
+
+async function loadFromPostgres(client) {
+  const d = defaults();
+
+  for (const table of TOP_LEVEL_TABLES) {
+    const pgName = pgTableName(table);
+    try {
+      const res = await client.query(`SELECT * FROM ${pgName}`);
+      for (const row of res.rows) {
+        const item = pgRowToCamel(row);
+        if (table === 'users') d.users.push(item);
+        else if (table === 'sessions') d.sessions.push(item);
+        else if (table === 'doctorAccounts') d.doctorAccounts.push(item);
+        else if (table === 'storeOwnerAccounts') d.storeOwnerAccounts.push(item);
+        else if (table === 'adminAccounts') d.adminAccounts.push(item);
+        else if (table === 'consultTickets') d.consultTickets.push(item);
+        else if (table === 'consultAppointments') d.consultAppointments.push(item);
+        else if (table === 'consultMessages') {
+          if (!d.consultMessages[item.ticketId]) d.consultMessages[item.ticketId] = [];
+          d.consultMessages[item.ticketId].push(item);
+        }
+        else if (table === 'feedback') d.feedback.push(item);
+        else if (table === 'stores') d.stores.push(item);
+      }
+    } catch (e) {
+      console.error('[db] Could not load table', pgName, e.message);
+    }
+  }
+
+  for (const collName of USER_COLLECTIONS) {
+    try {
+      const res = await client.query(
+        `SELECT userid, data FROM user_collections WHERE collection = $1`,
+        [collName]
+      );
+      for (const row of res.rows) {
+        const item = pgRowToCamel(row);
+        d[collName][item.userId] = item.data || (['plans', 'settings', 'profiles'].includes(collName) ? {} : []);
+      }
+    } catch (e) {
+      console.error('[db] Could not load collection', collName, e.message);
+    }
+  }
+
+  return d;
+}
+
+async function persistToPostgres(client) {
+  await client.query('BEGIN');
+
   try {
-    const pg = await import('pg');
-    const client = new pg.default.Client({
-      connectionString: process.env.SUPABASE_DB_URL,
-      ssl: { rejectUnauthorized: false }
-    });
-    await client.connect();
-    await client.query(
-      `CREATE TABLE IF NOT EXISTS app_state (
-         id    boolean PRIMARY KEY DEFAULT true,
-         state jsonb NOT NULL)`
-    );
-    const r = await client.query('SELECT state FROM app_state WHERE id = true');
-    if (r.rows.length) db = { ...defaults(), ...r.rows[0].state };
-    // pg.Client queues queries on its single connection, so concurrent
-    // persist() calls are safe; each write carries the full state.
-    cloudClient = client;
-    console.log('[db] using Supabase Postgres persistence');
+    for (const table of TOP_LEVEL_TABLES) {
+      const pgName = pgTableName(table);
+      await client.query(`DELETE FROM ${pgName}`);
+      let rows = [];
+      if (table === 'users') rows = db.users;
+      else if (table === 'sessions') rows = db.sessions;
+      else if (table === 'doctorAccounts') rows = db.doctorAccounts;
+      else if (table === 'storeOwnerAccounts') rows = db.storeOwnerAccounts;
+      else if (table === 'adminAccounts') rows = db.adminAccounts;
+      else if (table === 'consultTickets') rows = db.consultTickets;
+      else if (table === 'consultAppointments') rows = db.consultAppointments;
+      else if (table === 'consultMessages') rows = Object.values(db.consultMessages).flat();
+      else if (table === 'feedback') rows = db.feedback;
+      else if (table === 'stores') rows = db.stores;
+
+      for (const item of rows) {
+        const cols = Object.keys(item);
+        const vals = Object.values(item);
+        const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
+        const colList = cols.join(', ');
+        await client.query(`INSERT INTO ${pgName} (${colList}) VALUES (${placeholders})`, vals);
+      }
+    }
+
+    for (const collName of USER_COLLECTIONS) {
+      for (const [userId, data] of Object.entries(db[collName] || {})) {
+        await client.query(`
+          INSERT INTO user_collections (userid, collection, data, updatedat)
+          VALUES ($1, $2, $3::jsonb, NOW())
+          ON CONFLICT (userid, collection) DO UPDATE SET
+            data = EXCLUDED.data, updatedat = NOW()
+        `, [userId, collName, JSON.stringify(data || null)]);
+      }
+    }
+
+    await client.query('COMMIT');
   } catch (e) {
-    console.error('[db] SUPABASE_DB_URL set but connection failed (' + e.message + ') — using local file instead.');
+    await client.query('ROLLBACK');
+    throw e;
   }
 }
 
-/* Local paths — uploads always live here; db.json is the file-mode store. */
-const DATA_DIR = process.env.HealthSphere_DATA_DIR
-  || process.env.DATA_DIR
-  || (!cloudClient && process.env.VERCEL ? '/tmp/healthsphere-data' : path.join(ROOT, 'data'));
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const DB_PATH = path.join(DATA_DIR, 'db.json');
-export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-let persistImpl;
-if (cloudClient) {
-  persistImpl = () => {
-    cloudClient.query(
-      `INSERT INTO app_state (id, state) VALUES (true, $1::jsonb)
-       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state`,
-      [JSON.stringify(db)]
-    ).catch(e => console.error('[db] cloud persist failed:', e.message));
-  };
-} else {
-  try {
-    db = { ...defaults(), ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) };
-  } catch { /* fresh database */ }
-
-  persistImpl = () => {
-    const tmp = DB_PATH + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 1));
-    fs.renameSync(tmp, DB_PATH);
-  };
+/* ---------- Blocking init with top-level await ---------- */
+try {
+  pgClient = await connectPostgres();
+  pgEnabled = true;
+  db = await loadFromPostgres(pgClient);
+  console.log('[db] using PostgreSQL persistence (local)');
+} catch (e) {
+  console.error('[db] PostgreSQL unavailable — JSON file mode:', e.message);
+  pgEnabled = false;
+  pgClient = null;
+  try { db = { ...defaults(), ...JSON.parse(fs.readFileSync(DB_PATH, 'utf8')) }; } catch { /* fresh */ }
 }
+
+const persistToFile = () => {
+  const tmp = DB_PATH + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 1));
+  fs.renameSync(tmp, DB_PATH);
+};
+
+const persistToDb = async () => {
+  if (!pgEnabled || !pgClient) {
+    persistToFile();
+    return;
+  }
+  try {
+    await persistToPostgres(pgClient);
+  } catch (e) {
+    console.error('[db] postgres persist failed, writing JSON fallback:', e.message);
+    persistToFile();
+  }
+};
+
+const persistImpl = pgEnabled ? persistToDb : persistToFile;
+
+// Serialize all persistence. persistToPostgres runs a full snapshot
+// (DELETE + INSERT) inside a single transaction on the shared pgClient;
+// concurrent un-awaited calls used to interleave BEGIN/COMMIT on that one
+// client, which aborted transactions and corrupted rows (e.g. users with
+// mismatched password hashes). Chaining them guarantees only one snapshot
+// runs at a time.
+let persistChain = Promise.resolve();
 
 process.on('exit', () => {
-  try { if (!cloudClient) persist(); } catch { /* noop */ }
+  try { persistImpl(); } catch { /* noop */ }
+  try { if (pgClient) pgClient.end(); } catch { /* noop */ }
 });
 
-export function persist() { persistImpl(); }
-
-/** Where data currently lives — used by the admin panel's system info. */
-export function storageMode() {
-  return cloudClient ? 'postgres' : 'json-file';
+export function persist() {
+  persistChain = persistChain
+    .then(() => persistImpl())
+    .catch(e => console.error('[db] persist error:', e.message));
+  return persistChain;
 }
 
-/** Get or create the per-user array for a collection. */
+export function storageMode() {
+  return pgEnabled ? 'postgres' : 'json-file';
+}
+
 export function coll(name, userId) {
   if (!db[name][userId]) db[name][userId] = [];
   return db[name][userId];

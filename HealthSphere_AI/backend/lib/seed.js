@@ -64,12 +64,12 @@ export function ensureSeed() {
   });
 
   const fam = [
-    { relation: 'Grandfather', name: 'Ramesh Mehta', ageOrYear: '~84', conditions: [{ name: 'Type 2 Diabetes', diagAge: 62 }, { name: 'Hypertension', diagAge: 58 }] },
-    { relation: 'Father', name: 'Suresh Mehta', ageOrYear: '61', conditions: [{ name: 'Hypertension', diagAge: 48 }, { name: 'High cholesterol', diagAge: 52 }] },
-    { relation: 'Mother', name: 'Nirmala Mehta', ageOrYear: '58', conditions: [{ name: 'Hypothyroidism', diagAge: 45 }] },
-    { relation: 'Uncle', name: 'Mahesh Mehta', ageOrYear: '57', conditions: [{ name: 'Type 2 Diabetes', diagAge: 55 }] },
-    { relation: 'Sister', name: 'Priya Shah', ageOrYear: '33', conditions: [] }
-  ].map((f, i) => ({ id: uid('fam'), ...f, surgeries: [], cancerHistory: false, geneticConditions: [], events: [], notes: '', recordedAt: new Date(Date.now() - (i + 3) * 86400000).toISOString() }));
+    { relation: 'Grandfather', name: 'Ramesh Mehta', ageOrYear: '~84', sex: 'male', conditions: [{ name: 'Type 2 Diabetes', diagAge: 62 }, { name: 'Hypertension', diagAge: 58 }] },
+    { relation: 'Father', name: 'Suresh Mehta', ageOrYear: '61', sex: 'male', conditions: [{ name: 'Hypertension', diagAge: 48 }, { name: 'High cholesterol', diagAge: 52 }] },
+    { relation: 'Mother', name: 'Nirmala Mehta', ageOrYear: '58', sex: 'female', conditions: [{ name: 'Hypothyroidism', diagAge: 45 }] },
+    { relation: 'Uncle', name: 'Mahesh Mehta', ageOrYear: '57', sex: 'male', conditions: [{ name: 'Type 2 Diabetes', diagAge: 55 }] },
+    { relation: 'Sister', name: 'Priya Shah', ageOrYear: '33', sex: 'female', conditions: [] }
+  ].map((f, i) => ({ id: uid('fam'), ...f, deceased: false, surgeries: [], cancerHistory: false, geneticConditions: [], events: [], notes: '', recordedAt: new Date(Date.now() - (i + 3) * 86400000).toISOString() }));
   db.families[id] = fam;
 
   // ---- metrics history (incl. report-sourced values) ----

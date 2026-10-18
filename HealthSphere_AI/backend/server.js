@@ -23,6 +23,13 @@ ensureSeed();
 
 const server = http.createServer(handler);
 
+// Research Hub background scheduler (no-op when RESEARCH_ENABLED=false)
+import('./lib/research/scheduler.js').then(m => {
+  m.startResearchScheduler();
+  process.on('SIGINT', () => m.stopResearchScheduler());
+  process.on('SIGTERM', () => m.stopResearchScheduler());
+}).catch(e => console.error('[research] scheduler load failed:', e.message));
+
 export default async function handler(req, res) {
   applySecurityHeaders(res);
   try {

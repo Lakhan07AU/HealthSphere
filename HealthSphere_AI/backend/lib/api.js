@@ -23,6 +23,7 @@ import { TERMS_BODY } from './terms-text.js';
 import { doctorRoutes } from './api-doctor.js';
 import { storeRoutes } from './api-store.js';
 import { admin2Routes } from './api-admin2.js';
+import { researchRoutes } from './research/api.js';
 import { ensureSeed } from './seed.js';
 import { consultRoutes } from './api-consult.js';
 
@@ -351,6 +352,8 @@ route('POST', /^\/api\/family$/, (req, res, p) => {
     id: uid('fam'),
     relation: b.relation, relationTo,
     name: b.name || '', ageOrYear: b.ageOrYear || '',
+    sex: ['male', 'female'].includes(b.sex) ? b.sex : (b.sex === 'unknown' ? 'unknown' : ''),
+    deceased: !!b.deceased,
     conditions: Array.isArray(b.conditions) ? b.conditions : [],
     surgeries: arr(b.surgeries), cancerHistory: !!b.cancerHistory,
     geneticConditions: arr(b.geneticConditions), events: [], notes: b.notes || '',
@@ -374,6 +377,8 @@ route('PUT', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
     catch (e) { return bad(res, e); }
   } else if (!m.relationTo) m.relationTo = 'you';
   if ('cancerHistory' in b) m.cancerHistory = !!b.cancerHistory;
+  if ('sex' in b) m.sex = ['male', 'female'].includes(b.sex) ? b.sex : (b.sex === 'unknown' ? 'unknown' : '');
+  if ('deceased' in b) m.deceased = !!b.deceased;
   persist();
   ok(res, { member: m });
 });
@@ -1201,6 +1206,23 @@ export async function handleApi(req, res, pathname, query, body) {
       await r.handler(req, res, { params: m.slice(1), query, body, user, req });
     } catch (e) {
       console.error('[api-admin2]', e);
+      bad(res, e, 500);
+    }
+    return true;
+  }
+
+  // Check research hub routes
+  for (const r of researchRoutes) {
+    if (r.method !== req.method) continue;
+    const m = pathname.match(r.pattern);
+    if (!m) continue;
+    const needsAuth = r.opts.auth !== false;
+    const user = getAuthedUser(req);
+    if (needsAuth && !user) { send(res, 401, { error: 'Please sign in.' }); return true; }
+    try {
+      await r.handler(req, res, { params: m.slice(1), query, body, user, req });
+    } catch (e) {
+      console.error('[api-research]', e);
       bad(res, e, 500);
     }
     return true;
