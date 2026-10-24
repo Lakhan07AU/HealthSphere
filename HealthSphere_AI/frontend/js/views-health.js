@@ -305,9 +305,17 @@ VIEWS.family = async function (container) {
       <div class="mt"></div>
       <label>Conditions — one per line as &ldquo;Condition @ diagnosis-age&rdquo;</label>
       <textarea name="conditionsRaw" rows="3" placeholder="Type 2 Diabetes @62&#10;Hypertension @48">${esc(conditionsToRaw(m.conditions))}</textarea>
+      <div class="mt"></div>
+      <label>Treatment / disease details</label>
+      <textarea name="treatment" rows="3" placeholder="Diagnosis, medicines, procedures, treating doctor, hospital...">${esc(m.treatment || '')}</textarea>
       <div class="grid g2 mt">
         <div><label>Surgeries / genetic conditions (comma-separated)</label><input name="geneticConditions" value="${esc((m.geneticConditions || []).join(', '))}"></div>
         <div><label>Notes</label><input name="notes" value="${esc(m.notes || '')}" placeholder="Relevant health events"></div>
+      </div>
+      <div class="mt">
+        <label>Upload documents (PDF, image or text — max 15 MB each)</label>
+        <input type="file" name="documents" accept=".pdf,.png,.jpg,.jpeg,.txt,application/pdf,image/png,image/jpeg,text/plain" multiple>
+        <div class="page-sub" style="margin-top:4px">Attach treatment records, discharge summaries or prescriptions.${(m.documents || []).length ? ` ${m.documents.length} document${m.documents.length > 1 ? 's' : ''} already attached.` : ''}</div>
       </div>`;
   }
   function formToBody(fd, anchorId) {
@@ -317,9 +325,32 @@ VIEWS.family = async function (container) {
       name: fd.get('name'), relation: fd.get('relation'), ageOrYear: fd.get('ageOrYear'),
       sex: fd.get('sex') || '', deceased: !!fd.get('deceased'),
       cancerHistory: !!fd.get('cancerHistory'), conditions: parseConditions(fd.get('conditionsRaw')),
-      geneticConditions: fd.get('geneticConditions'), notes: fd.get('notes'),
+      geneticConditions: fd.get('geneticConditions'), notes: fd.get('notes'), treatment: fd.get('treatment'),
       relationTo: relTo
     };
+  }
+  async function fileToBase64(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return btoa(binary);
+  }
+  async function uploadFamilyDocuments(memberId, files) {
+    const list = Array.from(files || []).filter(f => f && f.size);
+    for (const file of list) {
+      if (file.size > 15 * 1024 * 1024) throw new Error(`${file.name} is larger than 15 MB.`);
+      await api(`/api/family/${memberId}/documents`, {
+        method: 'POST', timeout: 60000,
+        body: { filename: file.name, mime: file.type || '', dataBase64: await fileToBase64(file) }
+      });
+    }
+    return list.length;
+  }
+  function fmtDocBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(2)} MB`;
   }
   async function removeMember(id) {
     if (!(await confirmDlg('Remove member?', 'This removes this person and their conditions from your family history.', 'Remove'))) return;
@@ -342,10 +373,15 @@ VIEWS.family = async function (container) {
     modal.el.querySelector('#fm-edit-cancel').onclick = () => modal.close();
     modal.el.querySelector('#fm-edit-form').onsubmit = async e => {
       e.preventDefault();
+      const fd = new FormData(e.target);
+      const files = fd.getAll('documents');
       try {
-        await api(`/api/family/${m.id}`, { method: 'PUT', body: formToBody(new FormData(e.target), m.relationTo || 'you') });
+        await api(`/api/family/${m.id}`, { method: 'PUT', body: formToBody(fd, m.relationTo || 'you') });
+        let docsFailed = null;
+        try { await uploadFamilyDocuments(m.id, files); } catch (err) { docsFailed = err; }
         modal.close();
-        toast('Record updated — guidance re-analyzed.');
+        if (docsFailed) toast(`Record updated, but document upload failed: ${docsFailed.message}`, 'err');
+        else toast('Record updated — guidance re-analyzed.');
         VIEWS.family(container);
       } catch (err) { toast(err.message, 'err'); }
     };
@@ -366,13 +402,31 @@ VIEWS.family = async function (container) {
     modal.el.querySelector('#fm-add-cancel').onclick = () => modal.close();
     modal.el.querySelector('#fm-add-form').onsubmit = async e => {
       e.preventDefault();
+      const fd = new FormData(e.target);
+      const files = fd.getAll('documents');
       try {
-        await api('/api/family', { method: 'POST', body: formToBody(new FormData(e.target), anchorId || 'you') });
+        const { member } = await api('/api/family', { method: 'POST', body: formToBody(fd, anchorId || 'you') });
+        let docsFailed = null;
+        try { await uploadFamilyDocuments(member.id, files); } catch (err) { docsFailed = err; }
         modal.close();
-        toast('Family member added — guidance updated.');
+        if (docsFailed) toast(`Family member added, but document upload failed: ${docsFailed.message}`, 'err');
+        else toast('Family member added — guidance updated.');
         VIEWS.family(container);
       } catch (err) { toast(err.message, 'err'); }
     };
+  }
+
+  function docsHTML(m) {
+    const docs = m.documents || [];
+    if (!docs.length) return '<div class="page-sub">No documents attached yet.</div>';
+    return docs.map(d => `
+      <div class="row" style="justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding:6px 0">
+        <div>
+          <a href="${esc(d.fileUrl || '#')}" target="_blank" rel="noopener" style="font-weight:600">${esc(d.filename)}</a>
+          <div class="page-sub">${fmtDocBytes(d.size)} · ${d.uploadedAt ? fmtDateUI(String(d.uploadedAt).slice(0, 10)) : ''}</div>
+        </div>
+        <button class="btn sm danger-outline" data-del-doc="${esc(d.id)}">Delete</button>
+      </div>`).join('');
   }
 
   function openMemberModal(m) {
@@ -394,9 +448,19 @@ VIEWS.family = async function (container) {
       <dl class="fam-kv mt">
         <dt>Conditions</dt><dd>${conds.length ? conds.map(c => esc(c.name) + (c.diagAge ? ` <span class="page-sub">(@${esc(c.diagAge)})</span>` : '')).join(' · ') : '<span class="page-sub">None recorded</span>'}</dd>
         <dt>Surgeries / genetic</dt><dd>${(m.geneticConditions || []).length ? esc((m.geneticConditions || []).join(', ')) : '<span class="page-sub">None recorded</span>'}</dd>
+        <dt>Treatment / disease</dt><dd>${m.treatment ? esc(m.treatment) : '<span class="page-sub">Not recorded</span>'}</dd>
         <dt>Notes</dt><dd>${m.notes ? esc(m.notes) : '<span class="page-sub">—</span>'}</dd>
         <dt>Added</dt><dd class="page-sub">${m.recordedAt ? fmtDateUI(String(m.recordedAt).slice(0, 10)) : '—'}</dd>
       </dl>
+      <div class="mt">
+        <div class="spread" style="align-items:center">
+          <h3 style="margin:0">Documents</h3>
+          <label class="btn sm secondary" style="cursor:pointer;margin:0">Upload document
+            <input type="file" id="fm-doc-file" accept=".pdf,.png,.jpg,.jpeg,.txt,application/pdf,image/png,image/jpeg,text/plain" multiple hidden>
+          </label>
+        </div>
+        <div id="fm-docs" class="mt">${docsHTML(m)}</div>
+      </div>
       <div class="disclaimer mt">Updating this record re-runs family-aware risk signals and screening guidance.</div>
       <div class="row mt fam-actions" style="justify-content:flex-end">
         <button class="btn sm secondary" id="fm-del">Remove</button>
@@ -410,6 +474,39 @@ VIEWS.family = async function (container) {
       openAddRelativeModal(m.name || label, m.id, suggestionsFor(m)[0]);
     };
     modal.el.querySelector('#fm-del').onclick = async () => { modal.close(); await removeMember(m.id); };
+
+    const fileInput = modal.el.querySelector('#fm-doc-file');
+    fileInput.onchange = async () => {
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) return;
+      fileInput.disabled = true;
+      try {
+        await uploadFamilyDocuments(m.id, files);
+        const { members } = await api('/api/family');
+        const updated = members.find(x => x.id === m.id);
+        if (updated) {
+          Object.assign(m, updated);
+          modal.el.querySelector('#fm-docs').innerHTML = docsHTML(m);
+          wireDocDeletes();
+        }
+        toast(files.length > 1 ? `${files.length} documents uploaded.` : 'Document uploaded.');
+      } catch (err) { toast(err.message, 'err'); }
+      finally { fileInput.disabled = false; fileInput.value = ''; }
+    };
+
+    function wireDocDeletes() {
+      modal.el.querySelectorAll('[data-del-doc]').forEach(btn => btn.onclick = async () => {
+        if (!(await confirmDlg('Delete document?', 'This permanently removes the attached file.', 'Delete'))) return;
+        try {
+          await api(`/api/family/${m.id}/documents/${btn.dataset.delDoc}`, { method: 'DELETE' });
+          m.documents = (m.documents || []).filter(d => d.id !== btn.dataset.delDoc);
+          modal.el.querySelector('#fm-docs').innerHTML = docsHTML(m);
+          wireDocDeletes();
+          toast('Document deleted.');
+        } catch (err) { toast(err.message, 'err'); }
+      });
+    }
+    wireDocDeletes();
   }
 
   function openYouModal() {
@@ -693,9 +790,16 @@ VIEWS.family = async function (container) {
         <div class="mt"></div>
         <label>Conditions — one per line as &ldquo;Condition @ diagnosis-age&rdquo; (age optional)</label>
         <textarea name="conditionsRaw" rows="3" placeholder="Type 2 Diabetes @62&#10;Hypertension @48"></textarea>
+        <div class="mt"></div>
+        <label>Treatment / disease details</label>
+        <textarea name="treatment" rows="2" placeholder="Diagnosis, medicines, procedures, treating doctor, hospital..."></textarea>
         <div class="grid g2 mt">
           <div><label>Surgeries / genetic conditions (comma-separated)</label><input name="geneticConditions" placeholder="Thalassemia trait"></div>
           <div><label>Notes</label><input name="notes" placeholder="Relevant health events"></div>
+        </div>
+        <div class="mt">
+          <label>Upload documents (PDF, image or text — max 15 MB each)</label>
+          <input type="file" name="documents" accept=".pdf,.png,.jpg,.jpeg,.txt,application/pdf,image/png,image/jpeg,text/plain" multiple>
         </div>
         <div class="mt row" style="align-items:center">
           <button class="btn" type="submit">Add to family history</button>
@@ -816,9 +920,14 @@ VIEWS.family = async function (container) {
   addForm.onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(addForm);
+    const files = fd.getAll('documents');
     try {
-      await api('/api/family', { method: 'POST', body: formToBody(fd, selectedId) });
-      toast('Family member added — guidance updated.'); VIEWS.family(container);
+      const { member } = await api('/api/family', { method: 'POST', body: formToBody(fd, selectedId) });
+      let docsFailed = null;
+      try { await uploadFamilyDocuments(member.id, files); } catch (err) { docsFailed = err; }
+      if (docsFailed) toast(`Family member added, but document upload failed: ${docsFailed.message}`, 'err');
+      else toast('Family member added — guidance updated.');
+      VIEWS.family(container);
     } catch (err) { toast(err.message, 'err'); }
   };
 };

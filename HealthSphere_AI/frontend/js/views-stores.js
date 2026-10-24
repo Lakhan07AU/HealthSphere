@@ -245,6 +245,25 @@ VIEWS.stores = async function (container) {
               ${s.hours ? `<div><b>Hours:</b> ${esc(s.hours)}</div>` : ''}
               ${s.contact ? `<div><b>Contact:</b> ${esc(s.contact)}</div>` : ''}
             </div>
+            ${(s.products || []).length > 0 ? `
+              <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
+                <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);font-weight:700;margin-bottom:8px">Medicines &amp; products (${s.products.length})</div>
+                <div class="row" style="gap:8px;flex-wrap:wrap">
+                  ${s.products.map(pr => `
+                    <div style="flex:1 1 240px;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:9px 11px">
+                      <div class="spread" style="gap:8px;align-items:flex-start">
+                        <b style="font-size:13px">${esc(pr.name)}</b>
+                        <span style="font-size:13px;font-weight:800;color:var(--primary);white-space:nowrap">₹${Number(pr.price || 0).toFixed(0)}</span>
+                      </div>
+                      <div style="font-size:11.5px;color:var(--ink-soft);margin-top:2px">${esc(pr.category || '')}${pr.unit ? ' · ' + esc(pr.unit) : ''}</div>
+                      <div class="row" style="gap:6px;margin-top:5px;font-size:11px;color:var(--ink-faint)">
+                        <span>${Number(pr.stock) > 0 ? `${Number(pr.stock)} in stock` : 'Out of stock'}</span>
+                        ${pr.requiresPrescription ? '<span class="chip warn">Rx required</span>' : ''}
+                      </div>
+                    </div>`).join('')}
+                </div>
+              </div>
+            ` : ''}
             ${(s.offers || []).length > 0 ? `
               <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
                 <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);font-weight:700;margin-bottom:8px">Current Offers</div>

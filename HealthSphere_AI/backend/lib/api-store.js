@@ -399,7 +399,7 @@ route('GET', /^\/api\/stores\/(?!city\/)([\w-]+)$/, (req, res, p) => {
     store: {
       id: store.id, name: store.name, category: store.category, address: store.address,
       lat: store.lat, lng: store.lng, hours: store.hours, contact: store.contact,
-      photos: store.photos, logo: store.logo, offers: store.offers
+      photos: store.photos, logo: store.logo, offers: store.offers, products: store.products || []
     }
   });
 });

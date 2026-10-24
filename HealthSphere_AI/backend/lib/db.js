@@ -95,18 +95,33 @@ const PG_TO_CAMEL = {
   durationmin: 'durationMin',
   meetinglink: 'meetingLink',
   ownername: 'ownerName',
+  storename: 'storeName',
   storeid: 'storeId',
+  ownerid: 'ownerId',
   licensenumber: 'licenseNumber',
+  idproof: 'idProof',
+  yearsexp: 'yearsExp',
   verificationstatus: 'verificationStatus',
   availabilitystatus: 'availabilityStatus',
   senderid: 'senderId',
+  sendername: 'senderName',
   senderrole: 'senderRole',
+  appointmentid: 'appointmentId',
   useremail: 'userEmail',
   patientid: 'patientId',
   doctorid: 'doctorId',
   ticketid: 'ticketId',
   scheduledat: 'scheduledAt',
-  meetinglink: 'meetingLink'
+  meetinglink: 'meetingLink',
+  doctorname: 'doctorName',
+  patientname: 'patientName',
+  confirmedslot: 'confirmedSlot',
+  sessionlink: 'sessionLink',
+  sessionid: 'sessionId',
+  assigneddoctorid: 'assignedDoctorId',
+  preferreddoctorid: 'preferredDoctorId',
+  preferreddoctorname: 'preferredDoctorName',
+  preferredslots: 'preferredSlots'
 };
 
 function pgRowToCamel(row) {
@@ -142,7 +157,7 @@ async function connectPostgres() {
   });
   await client.connect();
 
-  const schemaPath = path.join(ROOT, 'backend', 'lib', 'schema.sql');
+  const schemaPath = path.join(ROOT, 'lib', 'schema.sql');
   if (fs.existsSync(schemaPath)) {
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
     await client.query(schemaSql);
@@ -168,8 +183,10 @@ async function loadFromPostgres(client) {
         else if (table === 'consultTickets') d.consultTickets.push(item);
         else if (table === 'consultAppointments') d.consultAppointments.push(item);
         else if (table === 'consultMessages') {
-          if (!d.consultMessages[item.ticketId]) d.consultMessages[item.ticketId] = [];
-          d.consultMessages[item.ticketId].push(item);
+          const threadId = item.appointmentId || item.ticketId;
+          if (!threadId) continue;
+          if (!d.consultMessages[threadId]) d.consultMessages[threadId] = [];
+          d.consultMessages[threadId].push(item);
         }
         else if (table === 'feedback') d.feedback.push(item);
         else if (table === 'stores') d.stores.push(item);
@@ -212,13 +229,19 @@ async function persistToPostgres(client) {
       else if (table === 'adminAccounts') rows = db.adminAccounts;
       else if (table === 'consultTickets') rows = db.consultTickets;
       else if (table === 'consultAppointments') rows = db.consultAppointments;
-      else if (table === 'consultMessages') rows = Object.values(db.consultMessages).flat();
+      else if (table === 'consultMessages') {
+        rows = Object.entries(db.consultMessages).flatMap(([threadId, list]) =>
+          (list || []).map(m => ({ ...m, appointmentId: m.appointmentId || threadId, createdAt: m.createdAt || m.ts })));
+      }
       else if (table === 'feedback') rows = db.feedback;
       else if (table === 'stores') rows = db.stores;
 
       for (const item of rows) {
         const cols = Object.keys(item);
-        const vals = Object.values(item);
+        // Arrays/objects must be sent as JSON text for JSONB columns; node-postgres
+        // would otherwise serialize arrays as Postgres array literals.
+        const vals = Object.values(item).map(v =>
+          (v !== null && typeof v === 'object' && !(v instanceof Date)) ? JSON.stringify(v) : v);
         const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
         const colList = cols.join(', ');
         await client.query(`INSERT INTO ${pgName} (${colList}) VALUES (${placeholders})`, vals);

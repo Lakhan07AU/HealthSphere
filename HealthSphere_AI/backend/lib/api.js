@@ -339,7 +339,17 @@ function normalizeRelationTo(userId, raw, selfId) {
   return v;
 }
 
-route('GET', /^\/api\/family$/, (req, res, p) => ok(res, { members: coll('families', p.user.id) }));
+// Embedded bytes (tier-2 safety copies) never leave the server except via /file.
+const pubFamilyDoc = (memberId, d) => {
+  const { fileData, ...rest } = d;
+  return { ...rest, fileUrl: d.storedName ? `/api/family/${memberId}/documents/${d.id}/file` : null };
+};
+const pubFamilyMember = m => ({
+  ...m,
+  documents: (m.documents || []).map(d => pubFamilyDoc(m.id, d))
+});
+
+route('GET', /^\/api\/family$/, (req, res, p) => ok(res, { members: coll('families', p.user.id).map(pubFamilyMember) }));
 
 route('POST', /^\/api\/family$/, (req, res, p) => {
   const b = p.body || {};
@@ -357,13 +367,15 @@ route('POST', /^\/api\/family$/, (req, res, p) => {
     conditions: Array.isArray(b.conditions) ? b.conditions : [],
     surgeries: arr(b.surgeries), cancerHistory: !!b.cancerHistory,
     geneticConditions: arr(b.geneticConditions), events: [], notes: b.notes || '',
+    treatment: String(b.treatment || '').slice(0, 5000),
+    documents: [],
     recordedAt: new Date().toISOString()
   };
   coll('families', p.user.id).push(m);
   audit(p.user.id, 'family_member_added', `${m.relation}${relationTo !== 'you' ? ' → ' + relationTo : ''}`);
   persist();
   refreshAutoReminders(p.user);
-  ok(res, { member: m });
+  ok(res, { member: pubFamilyMember(m) });
 });
 
 route('PUT', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
@@ -371,7 +383,8 @@ route('PUT', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
   if (!m) return bad(res, new Error('Not found'), 404);
   const b = p.body || {};
   if ('relation' in b && !FAM_RELATIONS.includes(b.relation)) return bad(res, new Error('Unknown relationship type.'));
-  Object.assign(m, pick(b, ['relation', 'name', 'ageOrYear', 'conditions', 'surgeries', 'geneticConditions', 'notes']));
+  Object.assign(m, pick(b, ['relation', 'name', 'ageOrYear', 'conditions', 'surgeries', 'geneticConditions', 'notes', 'treatment']));
+  if (typeof m.treatment === 'string') m.treatment = m.treatment.slice(0, 5000);
   if ('relationTo' in b) {
     try { m.relationTo = normalizeRelationTo(p.user.id, b.relationTo, m.id); }
     catch (e) { return bad(res, e); }
@@ -380,14 +393,18 @@ route('PUT', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
   if ('sex' in b) m.sex = ['male', 'female'].includes(b.sex) ? b.sex : (b.sex === 'unknown' ? 'unknown' : '');
   if ('deceased' in b) m.deceased = !!b.deceased;
   persist();
-  ok(res, { member: m });
+  ok(res, { member: pubFamilyMember(m) });
 });
 
-route('DELETE', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
+route('DELETE', /^\/api\/family\/([\w-]+)$/, async (req, res, p) => {
   const id = p.params[0];
   const list = coll('families', p.user.id);
   const target = list.find(x => x.id === id);
   if (!target) return bad(res, new Error('Not found'), 404);
+  // Remove any stored documents along with the person.
+  for (const d of target.documents || []) {
+    if (d.storedName) await deleteFile(d.storedName, d);
+  }
   // Re-anchor anyone linked to the removed person up to the removed person's own
   // anchor (or 'you'), so subtrees stay attached instead of silently teleporting
   // to the center and scrambling the tree.
@@ -400,6 +417,64 @@ route('DELETE', /^\/api\/family\/([\w-]+)$/, (req, res, p) => {
   persist();
   refreshAutoReminders(p.user);
   ok(res, { ok: true });
+});
+
+/* ---------- FAMILY DOCUMENTS (treatment reports, PDFs, scans) ---------- */
+route('POST', /^\/api\/family\/([\w-]+)\/documents$/, async (req, res, p) => {
+  const m = famById(p.user.id, p.params[0]);
+  if (!m) return bad(res, new Error('Family member not found'), 404);
+  const b = p.body || {};
+  if (!b.filename || !b.dataBase64) return bad(res, new Error('filename and dataBase64 are required'));
+  let buffer;
+  try { buffer = Buffer.from(b.dataBase64, 'base64'); } catch { return bad(res, new Error('Invalid base64 payload')); }
+  if (!buffer.length) return bad(res, new Error('The uploaded file is empty.'));
+  if (buffer.length > 15 * 1024 * 1024) return bad(res, new Error('Files must be 15 MB or smaller.'), 413);
+  const mime = b.mime || guessMime(b.filename);
+  const filename = sanitizeName(b.filename);
+  const storedName = `${crypto.randomBytes(6).toString('hex')}_${filename}`;
+  const saved = await saveFile(storedName, buffer, mime);
+  if (!saved) return bad(res, new Error('Could not store the file. Try again.'));
+  const doc = {
+    id: uid('fdoc'), filename, storedName, mime, size: buffer.length,
+    uploadedAt: new Date().toISOString(), notes: String(b.notes || '').slice(0, 1000),
+    fileBackend: saved.backend
+  };
+  if (saved.backend === 'cloudinary') {
+    doc.cloudPublicId = saved.publicId;
+    doc.fileResourceType = saved.resourceType;
+  } else if (saved.backend === 'local' && shouldEmbed(buffer.length)) {
+    doc.fileData = buffer.toString('base64');
+  }
+  m.documents = [...(m.documents || []), doc];
+  audit(p.user.id, 'family_document_uploaded', `${m.name || m.relation}: ${filename}`);
+  persist();
+  ok(res, { document: pubFamilyDoc(m.id, doc), member: pubFamilyMember(m) });
+});
+
+route('GET', /^\/api\/family\/([\w-]+)\/documents\/([\w-]+)\/file$/, async (req, res, p) => {
+  const m = famById(p.user.id, p.params[0]);
+  const d = m && (m.documents || []).find(x => x.id === p.params[1]);
+  if (!d?.storedName) return bad(res, new Error('File not found'), 404);
+  const data = await readFile(d.storedName, d);
+  if (!data) return bad(res, new Error('File missing'), 404);
+  res.writeHead(200, {
+    'Content-Type': d.mime || 'application/octet-stream',
+    'Content-Disposition': `inline; filename="${path.basename(d.filename)}"`,
+    'Content-Length': data.buffer.length,
+  });
+  res.end(data.buffer);
+});
+
+route('DELETE', /^\/api\/family\/([\w-]+)\/documents\/([\w-]+)$/, async (req, res, p) => {
+  const m = famById(p.user.id, p.params[0]);
+  if (!m) return bad(res, new Error('Family member not found'), 404);
+  const d = (m.documents || []).find(x => x.id === p.params[1]);
+  if (!d) return bad(res, new Error('Document not found'), 404);
+  m.documents = m.documents.filter(x => x.id !== d.id);
+  if (d.storedName) await deleteFile(d.storedName, d);
+  audit(p.user.id, 'family_document_removed', `${m.name || m.relation}: ${d.filename}`);
+  persist();
+  ok(res, { ok: true, member: pubFamilyMember(m) });
 });
 
 /* ---------- REPORTS ---------- */

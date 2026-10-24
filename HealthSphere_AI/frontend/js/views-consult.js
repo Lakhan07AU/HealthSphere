@@ -17,6 +17,7 @@ VIEWS.consult = async function (container) {
 
   const tickets = ticketData.tickets || [];
   const specs = specData.specializations || [];
+  const doctorsList = specData.doctors || [];
   const onlineCount = specData.onlineCount || 0;
   const onlineBySpec = specData.onlineBySpecialization || {};
   const upcoming = apptData.upcoming || [];
@@ -29,13 +30,59 @@ VIEWS.consult = async function (container) {
     <div class="topbar">
       <div>
         <h1>Consult a Doctor</h1>
-        <div class="page-sub">${onlineCount} doctor${onlineCount !== 1 ? 's' : ''} currently online across ${specs.length} specializations</div>
+        <div class="page-sub">${onlineCount} doctor${onlineCount !== 1 ? 's' : ''} currently online · ${doctorsList.length} verified doctor${doctorsList.length !== 1 ? 's' : ''} across ${specs.length} specializations</div>
       </div>
     </div>
 
     <div class="card mb">
-      <h2>Raise a Consultation Ticket</h2>
-      <p class="page-sub" style="margin-bottom:14px">Describe your concern and preferred time. Available doctors in the matching specialization will be notified. Tickets expire in 15 minutes if no doctor accepts.</p>
+      <h2>Find a Doctor &amp; Request Consultation</h2>
+      <p class="page-sub" style="margin-bottom:14px">Browse verified doctors by specialization, see online status and fees, then raise a ticket directly to a specific doctor (or to the pool for faster pickup). Direct requests to offline doctors remain open for up to 24 hours.</p>
+      <div class="grid g2" style="margin-bottom:14px">
+        <div>
+          <label>Filter by Specialization</label>
+          <select id="doc-spec-filter">
+            <option value="all">All Specializations</option>
+            ${specs.map(s => `<option value="${esc(s)}">${esc(s)}${onlineBySpec[s] ? ` (${onlineBySpec[s]} online)` : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Quick View</label>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <span class="chip ok">Online</span>
+            <span class="chip neutral">Offline</span>
+            <span class="chip info">Verified</span>
+          </div>
+        </div>
+      </div>
+      <div id="doctor-directory" class="grid g2" style="gap:10px">
+        ${(doctorsList.length === 0 ? `
+          <div class="empty" style="grid-column:1/-1">No verified doctors yet. Seeded doctors are available once registered/verified in the system.</div>
+        ` : doctorsList.map(d => `
+          <div class="doctor-dir-card" data-doc-id="${esc(d.id)}" data-doc-spec="${esc(d.specialization||'')}" style="border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
+            <div class="spread" style="gap:10px;align-items:flex-start">
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <b style="font-size:14px">Dr. ${esc(d.name)}</b>
+                  <span class="chip ${d.availabilityStatus === 'online' ? 'ok' : 'neutral'}">${d.availabilityStatus === 'online' ? 'Online' : 'Offline'}</span>
+                  <span class="chip info">Verified</span>
+                </div>
+                <div class="page-sub" style="font-size:12px">${esc(d.qualification||'')} · ${esc(d.specialization||'')}</div>
+                <div class="row" style="gap:10px;margin-top:4px;font-size:12px;color:var(--ink-soft);flex-wrap:wrap">
+                  <span>${Number(d.yearsExp||0)} yrs exp</span>
+                  <span>Fee: ₹${Number(d.fee||0)}</span>
+                  ${d.licenseNumber ? `<span>Reg: ${esc(d.licenseNumber)}</span>` : ''}
+                </div>
+              </div>
+              <button class="btn sm" data-request-doc="${esc(d.id)}">Request Consultation</button>
+            </div>
+          </div>
+        `).join(''))}
+      </div>
+    </div>
+
+    <div class="card mb">
+      <h2>Raise a Consultation Ticket (Pool)</h2>
+      <p class="page-sub" style="margin-bottom:14px">Describe your concern and preferred time. Any available doctor in the matching specialization will be notified. Pool tickets expire in 15 minutes if no doctor accepts.</p>
       <form id="f-ticket">
         <div class="grid g2">
           <div>
@@ -64,7 +111,7 @@ VIEWS.consult = async function (container) {
         <div class="mt"></div>
         <label>Preferred Time Slot(s) — optional</label>
         <input name="preferredSlots" placeholder="e.g. Tomorrow 10AM-12PM, Today after 5PM">
-        <button class="btn big mt" type="submit">Submit Ticket</button>
+        <button class="btn big mt" type="submit">Submit Ticket to Pool</button>
       </form>
     </div>
 
@@ -167,7 +214,72 @@ VIEWS.consult = async function (container) {
       </div>`;
   }
 
-  // Submit ticket
+  // Filter doctor directory
+  const specFilter = container.querySelector('#doc-spec-filter');
+  const dir = container.querySelector('#doctor-directory');
+  if (specFilter && dir) {
+    specFilter.onchange = () => {
+      const val = specFilter.value;
+      dir.querySelectorAll('.doctor-dir-card').forEach(card => {
+        if (val === 'all' || card.dataset.docSpec === val) card.style.display = 'flex';
+        else card.style.display = 'none';
+      });
+    };
+  }
+
+  // Request consultation to specific doctor
+  dir && dir.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-request-doc]');
+    if (!btn) return;
+    const docId = btn.dataset.requestDoc;
+    const doc = doctorsList.find(d => d.id === docId);
+    if (!doc) return;
+    const m = openModal(`
+      <h2>Request Consultation — Dr. ${esc(doc.name)}</h2>
+      <p class="page-sub">${esc(doc.qualification)} · ${esc(doc.specialization)} · ${doc.availabilityStatus === 'online' ? 'Online now' : 'Offline'} · Fee ₹${Number(doc.fee||0)}</p>
+      <form id="f-direct-ticket">
+        <label>Symptoms / Reason for consultation</label>
+        <textarea name="symptoms" rows="3" placeholder="Describe your symptoms or reason for consultation..." required></textarea>
+        <div class="mt"></div>
+        <label>Urgency</label>
+        <select name="urgency">
+          <option value="normal">Normal</option>
+          <option value="low">Low priority</option>
+          <option value="urgent">Urgent</option>
+        </select>
+        <div class="mt"></div>
+        <label>Preferred Time Slot(s) — optional</label>
+        <input name="preferredSlots" placeholder="e.g. Tomorrow 10AM-12PM">
+        <div class="row mt" style="justify-content:flex-end">
+          <button class="btn secondary" type="button" id="dt-cancel">Cancel</button>
+          <button class="btn" type="submit">Send Request</button>
+        </div>
+      </form>
+    `);
+    m.el.querySelector('#dt-cancel').onclick = m.close;
+    m.el.querySelector('#f-direct-ticket').onsubmit = async ev => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const slotsRaw = fd.get('preferredSlots') || '';
+      const slots = slotsRaw ? slotsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+      try {
+        await api('/api/consult/tickets', {
+          method: 'POST',
+          body: {
+            doctorId: doc.id,
+            symptoms: fd.get('symptoms'),
+            urgency: fd.get('urgency'),
+            preferredSlots: slots
+          }
+        });
+        toast(doc.availabilityStatus === 'online' ? 'Request sent to Dr. ' + doc.name + '. They can accept now.' : 'Request sent to Dr. ' + doc.name + '. It will remain open for up to 24 hours.');
+        m.close();
+        VIEWS.consult(container);
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  });
+
+  // Submit ticket to pool
   container.querySelector('#f-ticket').onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -186,9 +298,9 @@ VIEWS.consult = async function (container) {
           preferredSlots: slots
         }
       });
-      toast('Ticket submitted! Waiting for a doctor to accept (expires in 15 min).');
+      toast('Ticket submitted to pool! Waiting for a doctor to accept (expires in 15 min).');
       VIEWS.consult(container);
-    } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = 'Submit Ticket'; }
+    } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = 'Submit Ticket to Pool'; }
   };
 };
 
@@ -207,16 +319,28 @@ VIEWS['consult-room'] = async function (container) {
       const all = [...(r.upcoming || []), ...(r.past || [])];
       const match = all.find(a => a.sessionId === roomId || a.id === roomId);
       if (match) { aptId = match.id; appointmentInfo = match; }
+    } else if (App.doctorUser) {
+      const r = await api('/api/doctor/appointments');
+      const all = [...(r.upcoming || []), ...(r.past || [])];
+      const match = all.find(a => a.sessionId === roomId || a.id === roomId);
+      if (match) { aptId = match.id; appointmentInfo = match; }
     }
   } catch {}
+
+  const backLink = App.doctorUser ? '#/doctor' : '#/consult';
+  const roomSub = appointmentInfo
+    ? (App.doctorUser
+        ? `Patient: ${esc(appointmentInfo.patientName || 'Patient')}`
+        : `With Dr. ${esc(appointmentInfo.doctorInfo?.name || appointmentInfo.doctorName || 'Doctor')}`)
+    : `Session: ${esc(aptId)}`;
 
   container.innerHTML = `
     <div class="topbar">
       <div>
         <h1>Consultation Room</h1>
-        <div class="page-sub">${appointmentInfo ? `With Dr. ${esc(appointmentInfo.doctorInfo?.name || appointmentInfo.doctorName || 'Doctor')}` : `Session: ${esc(aptId)}`}</div>
+        <div class="page-sub">${roomSub}</div>
       </div>
-      <a class="btn secondary" href="#/consult">Back to consultations</a>
+      <a class="btn secondary" href="${backLink}">Back to consultations</a>
     </div>
     <div class="card">
       <div class="chat-container">

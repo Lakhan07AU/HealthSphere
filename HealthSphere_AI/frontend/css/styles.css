@@ -985,3 +985,11 @@ svg[aria-hidden="true"][viewBox="0 0 24 24"]{flex-shrink:0;vertical-align:middle
 .rh-card:hover{border-color:#C6D3E4}
 .rh-evidence-note{font-size:10.5px;color:var(--muted);margin-top:4px}
 @media (max-width:720px){.rh-tabs a{padding:8px 10px;font-size:11.5px}}
+
+/* Store owner product table */
+.table-wrap{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:auto}
+.data-table{width:100%;border-collapse:collapse;font-size:13px}
+.data-table thead th{background:linear-gradient(180deg,rgba(0,87,184,.04),transparent);text-align:left;padding:10px 14px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-faint);border-bottom:1px solid var(--line)}
+.data-table tbody td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+.data-table tbody tr:last-child td{border-bottom:none}
+.data-table tbody tr:hover{background:rgba(0,87,184,.02)}

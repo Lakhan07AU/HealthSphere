@@ -178,7 +178,7 @@ route('GET', /^\/api\/doctor\/tickets$/, (req, res, p) => {
   ok(res, { tickets });
 });
 
-route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/accept$/, (req, res, p) => {
+route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/accept$/, async (req, res, p) => {
   const doctor = getAuthedDoctor(p.req);
   if (!doctor) return bad(res, new Error('Please sign in as a doctor.'), 401);
   if (doctor.verificationStatus !== 'verified') return bad(res, new Error('Account not verified.'));
@@ -211,12 +211,12 @@ route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/accept$/, (req, res, p) => {
     createdAt: new Date().toISOString()
   };
   db.consultAppointments.push(appointment);
-  persist();
+  await persist();
 
   ok(res, { ticket, appointment });
 });
 
-route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/reject$/, (req, res, p) => {
+route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/reject$/, async (req, res, p) => {
   const doctor = getAuthedDoctor(p.req);
   if (!doctor) return bad(res, new Error('Please sign in as a doctor.'), 401);
 
@@ -228,7 +228,7 @@ route('POST', /^\/api\/doctor\/tickets\/([\w-]+)\/reject$/, (req, res, p) => {
   ticket.status = 'rejected';
   ticket.rejectedBy = doctor.id;
   ticket.rejectionReason = b.reason || '';
-  persist();
+  await persist();
 
   ok(res, { ticket });
 });
@@ -238,14 +238,36 @@ route('GET', /^\/api\/doctor\/appointments$/, (req, res, p) => {
   const doctor = getAuthedDoctor(p.req);
   if (!doctor) return bad(res, new Error('Please sign in as a doctor.'), 401);
 
-  const now = new Date();
-  const all = db.consultAppointments.filter(a => a.doctorId === doctor.id);
-  const upcoming = all.filter(a => a.status === 'confirmed' && new Date(a.confirmedSlot) >= now);
-  const past = all.filter(a => a.status !== 'confirmed' || new Date(a.confirmedSlot) < now);
+  const now = Date.now();
+  const all = (db.consultAppointments || []).filter(a => a && a.doctorId === doctor.id);
+  // Treat all confirmed appointments as visible to doctor for now (fix display)
+  const upcoming = all.filter(a => {
+    if (a.status === 'confirmed') return true;
+    return false;
+  });
+  const past = all.filter(a => a.status !== 'confirmed');
 
   ok(res, {
-    upcoming: upcoming.sort((a, b) => new Date(a.confirmedSlot) - new Date(b.confirmedSlot)),
-    past: past.sort((a, b) => new Date(b.confirmedSlot) - new Date(a.confirmedSlot)).slice(0, 30)
+    upcoming: upcoming.sort((a, b) => {
+      try {
+        const da = new Date(a.confirmedSlot).getTime();
+        const db2 = new Date(b.confirmedSlot).getTime();
+        if (isNaN(da) && isNaN(db2)) return 0;
+        if (isNaN(da)) return -1;
+        if (isNaN(db2)) return 1;
+        return da - db2;
+      } catch { return 0; }
+    }),
+    past: past.sort((a, b) => {
+      try {
+        const da = new Date(a.confirmedSlot).getTime();
+        const db2 = new Date(b.confirmedSlot).getTime();
+        if (isNaN(da) && isNaN(db2)) return 0;
+        if (isNaN(da)) return 1;
+        if (isNaN(db2)) return -1;
+        return db2 - da;
+      } catch { return 0; }
+    }).slice(0, 30)
   });
 });
 
@@ -253,20 +275,26 @@ route('GET', /^\/api\/doctor\/appointments$/, (req, res, p) => {
 route('GET', /^\/api\/consult\/messages\/([\w-]+)$/, (req, res, p) => {
   const user = getAuthedDoctor(p.req);
   if (!user) return bad(res, new Error('Please sign in.'), 401);
-  const aptId = p.params[0];
-  const msgs = db.consultMessages[aptId] || [];
+  const roomId = p.params[0];
+  const apt = (db.consultAppointments || []).find(a => a && a.doctorId === user.id && (a.id === roomId || a.sessionId === roomId));
+  if (!apt) return bad(res, new Error('Appointment not found.'), 404);
+  const msgs = db.consultMessages[apt.id] || [];
   ok(res, { messages: msgs });
 });
 
-route('POST', /^\/api\/consult\/messages\/([\w-]+)$/, (req, res, p) => {
+route('POST', /^\/api\/consult\/messages\/([\w-]+)$/, async (req, res, p) => {
   const user = getAuthedDoctor(p.req);
   if (!user) return bad(res, new Error('Please sign in.'), 401);
-  const aptId = p.params[0];
+  const roomId = p.params[0];
+  const apt = (db.consultAppointments || []).find(a => a && a.doctorId === user.id && (a.id === roomId || a.sessionId === roomId));
+  if (!apt) return bad(res, new Error('Appointment not found.'), 404);
+  const aptId = apt.id;
   const b = p.body || {};
   if (!b.text) return bad(res, new Error('Message text required.'));
   if (!db.consultMessages[aptId]) db.consultMessages[aptId] = [];
   const msg = {
     id: uid('msg'),
+    appointmentId: aptId,
     senderId: user.id,
     senderName: user.name,
     senderRole: 'doctor',
@@ -274,7 +302,7 @@ route('POST', /^\/api\/consult\/messages\/([\w-]+)$/, (req, res, p) => {
     ts: new Date().toISOString()
   };
   db.consultMessages[aptId].push(msg);
-  persist();
+  await persist();
   ok(res, { message: msg });
 });
 
@@ -326,14 +354,44 @@ route('GET', /^\/api\/doctor\/patients\/([\w-]+)$/, (req, res, p) => {
   });
 });
 
-/* ---------- All verified online doctors by specialization ---------- */
+/* ---------- All verified doctors (public directory) ---------- */
+route('GET', /^\/api\/doctors\/list$/, (req, res, p) => {
+  const docs = db.doctorAccounts
+    .filter(d => d.verificationStatus === 'verified')
+    .sort((a, b) => {
+      if (a.availabilityStatus !== b.availabilityStatus) return a.availabilityStatus === 'online' ? -1 : 1;
+      if ((b.yearsExp || 0) !== (a.yearsExp || 0)) return (b.yearsExp || 0) - (a.yearsExp || 0);
+      return (a.name || '').localeCompare(b.name || '');
+    })
+    .map(d => ({
+      id: d.id,
+      name: d.name,
+      qualification: d.qualification,
+      specialization: d.specialization,
+      yearsExp: d.yearsExp || 0,
+      fee: d.fee || 0,
+      availabilityStatus: d.availabilityStatus,
+      licenseNumber: d.licenseNumber
+    }));
+  ok(res, { doctors: docs });
+});
+
+/* ---------- All verified doctors by specialization ---------- */
 route('GET', /^\/api\/doctors\/by-specialization\/([\w-]+)$/, (req, res, p) => {
   const spec = decodeURIComponent(p.params[0]);
   const docs = db.doctorAccounts
     .filter(d => d.verificationStatus === 'verified' && d.specialization === spec)
+    .sort((a, b) => {
+      if (a.availabilityStatus !== b.availabilityStatus) return a.availabilityStatus === 'online' ? -1 : 1;
+      return (b.yearsExp || 0) - (a.yearsExp || 0);
+    })
     .map(d => ({
-      id: d.id, name: d.name, qualification: d.qualification,
-      specialization: d.specialization, yearsExp: d.yearsExp, fee: d.fee,
+      id: d.id,
+      name: d.name,
+      qualification: d.qualification,
+      specialization: d.specialization,
+      yearsExp: d.yearsExp || 0,
+      fee: d.fee || 0,
       availabilityStatus: d.availabilityStatus
     }));
   ok(res, { doctors: docs });

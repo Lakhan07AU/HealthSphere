@@ -1,5 +1,5 @@
 ﻿import { db, coll, objColl, persist } from './db.js';
-import { registerUser } from './auth.js';
+import { registerUser, hashPassword } from './auth.js';
 import { processDocument } from './extraction.js';
 import { uid, addDays, todayISO } from './util.js';
 import { getInsights } from './insights.js';
@@ -36,6 +36,134 @@ Vitamin D (25-OH) : 18 ng/mL
 Blood Pressure : 138/88
 Please consult your physician for interpretation.`;
 
+/* ---------------- Marketplace seed: demo doctors + medical stores ----------------
+   Provides working doctor and store-owner logins plus a medicine catalogue per
+   store. Idempotent: accounts are matched by email, so restarts do not duplicate.
+   Credentials are documented in README.md. */
+
+function seedMarketplace() {
+  let changed = false;
+
+  const med = (name, category, description, price, mrp, stock, unit, rx = false, tags = []) => ({
+    id: uid('prod'), name, category, description, price, mrp, stock, unit,
+    requiresPrescription: rx, tags, image: '',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  });
+
+  const ensureStore = ({ ownerId, storeId, ownerName, storeName, email, password, licenseNumber, address, contact, hours, category, lat, lng, products }) => {
+    if (db.storeOwnerAccounts.some(o => o.email === email)) return;
+    const { salt, hash } = hashPassword(password);
+    const owner = {
+      id: ownerId, email, ownerName, storeName, passwordSalt: salt, passwordHash: hash,
+      licenseNumber, address, contact, hours, photos: [],
+      verificationStatus: 'verified', storeId, createdAt: new Date().toISOString()
+    };
+    const store = {
+      id: storeId, ownerId, name: storeName, category, address, lat, lng, hours, contact,
+      photos: [], logo: '', offers: [], products, status: 'approved',
+      views: 0, clicks: 0, createdAt: new Date().toISOString()
+    };
+    db.storeOwnerAccounts.push(owner);
+    db.stores.push(store);
+    changed = true;
+  };
+
+  const ensureDoctor = ({ id, email, password, name, qualification, specialization, licenseNumber, yearsExp, fee, online }) => {
+    if (db.doctorAccounts.some(d => d.email === email)) return;
+    const { salt, hash } = hashPassword(password);
+    db.doctorAccounts.push({
+      id, email, name, passwordSalt: salt, passwordHash: hash,
+      qualification, specialization, licenseNumber,
+      idProof: 'Demo account — registration certificate on file',
+      yearsExp, fee, verificationStatus: 'verified',
+      availabilityStatus: online ? 'online' : 'offline',
+      createdAt: new Date().toISOString()
+    });
+    changed = true;
+  };
+
+  ensureStore({
+    ownerId: 'storeown_seed_sunrise', storeId: 'store_seed_sunrise',
+    ownerName: 'Ravi Sharma', storeName: 'Sunrise Pharmacy',
+    email: 'pharmacy1@healthsphere.ai', password: 'Pharmacy@1234',
+    licenseNumber: 'MH-PH-2024-001', address: '12 Linking Road, Andheri West, Mumbai 400058',
+    contact: '+91 98200 11001', hours: 'Mon-Sat 8:00-23:00, Sun 9:00-21:00',
+    category: 'Pharmacy', lat: 19.1364, lng: 72.8296,
+    products: [
+      med('Paracetamol 500mg', 'Pain Relief', 'Fever and mild pain relief, 15 tablets per strip', 25, 32, 120, 'strip', false, ['fever', 'pain']),
+      med('Metformin 500mg', 'Diabetes Care', 'First-line oral medicine for type 2 diabetes, 20 tablets', 45, 58, 80, 'strip', true, ['diabetes']),
+      med('Amlodipine 5mg', 'Blood Pressure', 'Calcium-channel blocker for hypertension, 15 tablets', 38, 49, 65, 'strip', true, ['hypertension']),
+      med('Cetirizine 10mg', 'Allergy', 'Antihistamine for seasonal allergies and hives, 10 tablets', 18, 24, 140, 'strip', false, ['allergy']),
+      med('Vitamin D3 60K IU', 'Supplements', 'Weekly vitamin D sachet for deficiency', 85, 110, 90, 'sachet', false, ['vitamin d']),
+      med('Omeprazole 20mg', 'Gastro Care', 'Acid-reflux and ulcer treatment, 15 capsules', 52, 68, 70, 'strip', true, ['acidity']),
+      med('Digital Thermometer', 'Devices', 'Fast-read digital body thermometer', 199, 299, 35, 'pcs', false, ['device']),
+      med('Surgical Mask (50 pack)', 'Safety', '3-ply disposable face masks', 150, 220, 60, 'box', false, ['mask'])
+    ]
+  });
+
+  ensureStore({
+    ownerId: 'storeown_seed_medplus', storeId: 'store_seed_medplus',
+    ownerName: 'Priya Nair', storeName: 'MedPlus Chemist',
+    email: 'pharmacy2@healthsphere.ai', password: 'Pharmacy@1234',
+    licenseNumber: 'KA-PH-2023-442', address: '80 Feet Road, Koramangala 4th Block, Bengaluru 560034',
+    contact: '+91 98450 22002', hours: 'Daily 8:30-22:30',
+    category: 'Pharmacy', lat: 12.9345, lng: 77.6266,
+    products: [
+      med('Atorvastatin 10mg', 'Cholesterol', 'Statin for high cholesterol, 15 tablets', 78, 95, 55, 'strip', true, ['cholesterol']),
+      med('Levothyroxine 50mcg', 'Thyroid Care', 'Daily thyroid hormone replacement, 30 tablets', 62, 75, 48, 'strip', true, ['thyroid']),
+      med('Azithromycin 500mg', 'Antibiotics', 'Three-day antibiotic course, 3 tablets', 88, 105, 40, 'strip', true, ['antibiotic']),
+      med('ORS Powder', 'Hydration', 'Oral rehydration salts for dehydration', 22, 28, 180, 'sachet', false, ['hydration']),
+      med('Ibuprofen 400mg', 'Pain Relief', 'Anti-inflammatory pain relief, 10 tablets', 28, 36, 110, 'strip', false, ['pain']),
+      med('Glucose Meter', 'Devices', 'Blood glucose monitoring kit with 10 strips', 749, 999, 20, 'pcs', false, ['diabetes', 'device']),
+      med('BP Monitor (Automatic)', 'Devices', 'Upper-arm digital blood pressure monitor', 1499, 1999, 14, 'pcs', false, ['device']),
+      med('Hand Sanitizer 500ml', 'Safety', '70% alcohol sanitizer with pump', 180, 250, 75, 'bottle', false, ['hygiene'])
+    ]
+  });
+
+  ensureStore({
+    ownerId: 'storeown_seed_wellcare', storeId: 'store_seed_wellcare',
+    ownerName: 'Amit Verma', storeName: 'WellCare Medical Store',
+    email: 'pharmacy3@healthsphere.ai', password: 'Pharmacy@1234',
+    licenseNumber: 'DL-PH-2022-778', address: 'B-Block, Connaught Place, New Delhi 110001',
+    contact: '+91 98110 33003', hours: 'Mon-Sun 9:00-22:00',
+    category: 'Pharmacy', lat: 28.6315, lng: 77.2167,
+    products: [
+      med('Insulin Glargine 100IU/ml', 'Diabetes Care', 'Long-acting insulin pen, cold-chain stored', 620, 740, 18, 'pen', true, ['insulin', 'diabetes']),
+      med('Aspirin 75mg', 'Heart Care', 'Low-dose blood thinner, 14 tablets', 15, 20, 130, 'strip', true, ['cardiac']),
+      med('Losartan 50mg', 'Blood Pressure', 'ARB for hypertension, 15 tablets', 58, 72, 60, 'strip', true, ['hypertension']),
+      med('Multivitamin Complex', 'Supplements', 'Daily multivitamin and mineral tablets, 30s', 240, 320, 85, 'bottle', false, ['vitamin']),
+      med('First Aid Kit', 'Safety', 'Home and travel first-aid essentials', 399, 550, 25, 'kit', false, ['first aid']),
+      med('Pulse Oximeter', 'Devices', 'Fingertip SpO2 and pulse monitor', 899, 1299, 30, 'pcs', false, ['device']),
+      med('Antiseptic Solution 100ml', 'Safety', 'Povidone-iodine wound antiseptic', 65, 82, 95, 'bottle', false, ['wound']),
+      med('N95 Mask (5 pack)', 'Safety', 'NIOSH-style particulate respirator masks', 275, 350, 42, 'pack', false, ['mask'])
+    ]
+  });
+
+  ensureDoctor({
+    id: 'docacc_seed_kavita', email: 'doctor1@healthsphere.ai', password: 'Doctor@1234',
+    name: 'Dr. Kavita Rao', qualification: 'MBBS, MD (General Medicine)',
+    specialization: 'General Physician', licenseNumber: 'MH-MC-2011-45231',
+    yearsExp: 14, fee: 600, online: true
+  });
+  ensureDoctor({
+    id: 'docacc_seed_sameer', email: 'doctor2@healthsphere.ai', password: 'Doctor@1234',
+    name: 'Dr. Sameer Menon', qualification: 'MBBS, MD, DM (Cardiology)',
+    specialization: 'Cardiologist', licenseNumber: 'MH-MC-2008-33120',
+    yearsExp: 17, fee: 900, online: true
+  });
+  ensureDoctor({
+    id: 'docacc_seed_ananya', email: 'doctor3@healthsphere.ai', password: 'Doctor@1234',
+    name: 'Dr. Ananya Iyer', qualification: 'MBBS, MD, DM (Endocrinology)',
+    specialization: 'Endocrinologist', licenseNumber: 'KA-MC-2013-56784',
+    yearsExp: 12, fee: 800, online: false
+  });
+
+  if (changed) {
+    persist();
+    console.log('Seeded marketplace accounts → 3 doctors + 3 medical stores (see README.md for credentials)');
+  }
+}
+
 export function ensureSeed() {
   // Seed accounts are system-created; record full consent so they satisfy
   // the same validateConsent() gate as real registrations.
@@ -47,6 +175,9 @@ export function ensureSeed() {
     persist();
     console.log('Seeded admin account → admin123@healthsphere.ai / Admin@1234');
   }
+
+  // Doctors and medical stores seed independently of the patient demo account.
+  seedMarketplace();
 
   // Skip demo seed if demo user already exists
   if (db.users.find(u => u.email === 'demo@healthsphere.ai')) return;
