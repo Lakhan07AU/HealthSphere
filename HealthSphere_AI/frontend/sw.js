@@ -7,7 +7,7 @@
    NOTE: cached API responses live in this browser's Cache Storage. On a
    shared device, use the browser profile per person (same rule as passwords). */
 
-const STATIC_CACHE = 'hs-static-v3';
+const STATIC_CACHE = 'hs-static-v4';
 const API_CACHE = 'hs-api-v1';
 const OFFLINE_CORE = ['/', '/index.html'];
 

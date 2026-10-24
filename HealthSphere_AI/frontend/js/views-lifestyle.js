@@ -1,5 +1,1029 @@
-/* ---------- Lifestyle hub + Reminders ---------- */VIEWS.lifestyle = async function (container) {  const d = await api('/api/lifestyle');  const wi = d.weeklyInsight;  const act = d.plans.activity, nut = d.plans.nutrition;  const logs = d.logs || [];  /* ---- compute weekly aggregates from logs ---- */  const now = Date.now();  const weekAgo = now - 7 * 86400000;  const twoWeeksAgo = now - 14 * 86400000;  const inRange = (iso, from, to) => { const t = new Date(iso).getTime(); return t >= from && t < to; };  const sumType = (type, from, to) => logs.filter(l => l.type === type && inRange(l.date, from, to)).reduce((a, b) => a + Number(b.value || 0), 0);  const avgType = (type, from, to) => { const arr = logs.filter(l => l.type === type && inRange(l.date, from, to)); return arr.length ? arr.reduce((a, b) => a + Number(b.value || 0), 0) / arr.length : null; };  const exCur = sumType('exercise_minutes', weekAgo, now);  const exPrev = sumType('exercise_minutes', twoWeeksAgo, weekAgo);  const slCur = avgType('sleep_hours', weekAgo, now);  const hyCur = avgType('hydration_liters', weekAgo, now);  const moodCur = avgType('mood_score', weekAgo, now);  /* ---- streak: consecutive days with any log ---- */  const logDates = new Set(logs.map(l => String(l.date).slice(0, 10)));  let streak = 0;  for (let i = 0; i < 365; i++) {    const dstr = new Date(now - i * 86400000).toISOString().slice(0, 10);    if (logDates.has(dstr)) streak++;    else if (i > 0) break;  }  /* ---- weekly targets (customizable, defaults match plan) ---- */  const targets = JSON.parse(localStorage.getItem('hs_lifestyle_targets') || '{}');  const T = {    exercise: targets.exercise || (act?.weeklyTargetMinutes || 150),    sleep: targets.sleep || 7,    hydration: targets.hydration || 2.5,    mood: targets.mood || 4,  };  /* ---- sparkline data (last 14 entries per type) ---- */  function sparkPoints(type, maxPoints = 14) {    const arr = logs.filter(l => l.type === type).slice().sort((a, b) => a.date < b.date ? -1 : 1).slice(-maxPoints);    if (arr.length < 2) return null;    const vals = arr.map(l => Number(l.value));    const min = Math.min(...vals), max = Math.max(...vals);    const range = max - min || 1;    return vals.map((v, i) => `${(i / (vals.length - 1) * 40).toFixed(1)},${(20 - ((v - min) / range) * 18).toFixed(1)}`).join(' ');  }  function sparkSVG(type, color) {    const pts = sparkPoints(type);    if (!pts) return '';    return `<span class="lg-spark"><svg width="42" height="22" viewBox="0 0 42 22"><polyline points="${pts}" stroke="${color}"/></svg></span>`;  }  /* ---- progress ring helper ---- */  function ring(cur, target, color, label, unit, icon) {    const pct = Math.min(1, (cur || 0) / target);    const r = 30, c = 2 * Math.PI * r;    const offset = c * (1 - pct);    const col = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? color : 'var(--warn)';    return `<div class="lg-ring-item">      <div class="lg-ring">        <svg viewBox="0 0 72 72">          <circle class="lg-ring-bg" cx="36" cy="36" r="${r}"/>          <circle class="lg-ring-fg" cx="36" cy="36" r="${r}" stroke="${col}" stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>        </svg>        <div class="lg-ring-center"><b>${icon}</b><small>${cur != null ? Math.round(cur) : '�?"'}</small></div>      </div>      <div class="lg-ring-label">${label}</div>      <div class="lg-ring-target">/ ${target}${unit}</div>    </div>`;  }  /* ---- mood icons map ---- */  const MOOD_ICON = { 1: 'frown', 2: 'meh', 3: 'meh', 4: 'smile', 5: 'laugh' };  const MOOD_LABEL = { 1: 'Very low', 2: 'Low', 3: 'Neutral', 4: 'Good', 5: 'Very good' };  /* ---- activity plan week state ---- */  const openWeeks = JSON.parse(localStorage.getItem('hs_open_weeks') || '[1]');  container.innerHTML = `    <div class="topbar"><div><h1>Lifestyle Hub</h1>      <div class="page-sub">Exercise, nutrition, sleep and hydration �?" personalized plans that adapt to your health graph.</div></div>      <div class="row" style="gap:8px;flex-shrink:0">        ${streak > 0 ? `<span class="lg-streak ${streak >= 7 ? 'fire' : ''}">${icon('flame', 14)} ${streak}-day streak</span>` : ''}        <button class="btn secondary" id="regen">${iconLabel('refresh', 'Regenerate plans', 15)}</button>      </div></div>    <!-- Progress rings -->    <div class="lg-rings mb">      ${ring(exCur, T.exercise, 'var(--primary)', 'Exercise', ' min', icon('runner', 20))}      ${ring(slCur != null ? Math.round(slCur * 10) / 10 : null, T.sleep, 'var(--teal)', 'Sleep', ' h', icon('moon', 20))}      ${ring(hyCur != null ? Math.round(hyCur * 10) / 10 : null, T.hydration, '#3B82F6', 'Water', ' L', icon('droplet', 20))}      ${ring(moodCur != null ? Math.round(moodCur * 10) / 10 : null, T.mood, '#F59E0B', 'Mood', '/5', icon('smile', 20))}    </div>    <div class="grid g2 mb">      <!-- Weekly insight + logging -->      <div class="card">        <div class="spread mb" style="margin-bottom:4px">          <h2 style="margin:0">This week vs last week</h2>          <button class="btn-icon" id="edit-targets" title="Customize weekly targets">${icon('settings', 16)}</button>        </div>        ${wi.hasData ? `          ${wi.insights.map(i => {            const icons = { Exercise: ['runner', 'primary'], Sleep: ['moon', 'teal'], Hydration: ['droplet', 'info'], 'Self-reported wellbeing': ['smile', 'warn'], Weight: ['scale', 'purple'] };            const spark = { Exercise: sparkSVG('exercise_minutes', '#0057B8'), Sleep: sparkSVG('sleep_hours', '#0E7C6B'), Hydration: sparkSVG('hydration_liters', '#3B82F6'), 'Self-reported wellbeing': sparkSVG('mood_score', '#F59E0B') };            const [ic, tint] = icons[i.area] || ['bar-chart', 'muted'];            return `<div class="lg-metric">              <div class="lg-metric-left">                <div class="ic-tile ${tint}">${icon(ic, 16)}</div>                <span class="lg-metric-name">${esc(i.area)}</span>                ${spark[i.area] || ''}              </div>              <div class="lg-metric-right">                <span class="lg-metric-val ${i.good ? 'flag-normal' : 'flag-borderline'}">${esc(i.text)}</span>              </div>            </div>`;          }).join('')}          <div class="mt" style="font-size:13.5px;background:var(--primary-soft,#EAF0F8);border-radius:10px;padding:12px 14px;line-height:1.55;display:flex;gap:10px;align-items:flex-start">            <span style="color:var(--primary);flex-shrink:0;margin-top:1px">${icon('lightbulb', 16)}</span>            <span><b>Recommendation.</b> ${esc(wi.recommendation)}</span></div>`          : '<div class="empty">Start logging below �?" insights appear after a week of data.</div>'}        <!-- Quick-log section -->        <div class="mt" style="border-top:1px solid var(--border);padding-top:14px">          <h3 style="margin-bottom:10px">Quick log</h3>          <!-- Exercise -->          <div style="margin-bottom:12px">            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('runner', 14, 'primary')} Exercise (minutes)</label>            <div class="lg-quick-row">              <form id="log-ex" class="row" style="gap:6px;flex:1">                <input name="value" type="number" min="0" placeholder="min" style="width:90px" id="ex-input">                <button class="btn sm">Log</button>              </form>              <button class="lg-qbtn" data-quick="ex" data-val="10">+10</button>              <button class="lg-qbtn" data-quick="ex" data-val="20">+20</button>              <button class="lg-qbtn" data-quick="ex" data-val="30">+30</button>              <button class="lg-qbtn" data-quick="ex" data-val="45">+45</button>            </div>          </div>          <!-- Sleep -->          <div style="margin-bottom:12px">            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('moon', 14, 'teal')} Sleep (hours)</label>            <div class="lg-quick-row">              <form id="log-sl" class="row" style="gap:6px;flex:1">                <input name="value" type="number" step="0.5" min="0" placeholder="hours" style="width:90px" id="sl-input">                <button class="btn sm">Log</button>              </form>              <button class="lg-qbtn" data-quick="sl" data-val="5">5h</button>              <button class="lg-qbtn" data-quick="sl" data-val="6">6h</button>              <button class="lg-qbtn" data-quick="sl" data-val="7">7h</button>              <button class="lg-qbtn" data-quick="sl" data-val="8">8h</button>            </div>          </div>          <!-- Hydration -->          <div style="margin-bottom:12px">            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('droplet', 14, 'info')} Water (liters)</label>            <div class="lg-quick-row">              <form id="log-hy" class="row" style="gap:6px;flex:1">                <input name="value" type="number" step="0.1" min="0" placeholder="liters" style="width:90px" id="hy-input">                <button class="btn sm">Log</button>              </form>              <button class="lg-qbtn" data-quick="hy" data-val="0.25">+250ml</button>              <button class="lg-qbtn" data-quick="hy" data-val="0.5">+500ml</button>              <button class="lg-qbtn" data-quick="hy" data-val="1">+1L</button>            </div>          </div>          <!-- Mood -->          <div>            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('smile', 14, 'warn')} How do you feel today?</label>            <div class="lg-mood-picker" id="mood-picker">              ${[1, 2, 3, 4, 5].map(v => `                <button class="mood-face" data-mood="${v}" title="${MOOD_LABEL[v]}">${icon(MOOD_ICON[v], 22)}</button>              `).join('')}              <span class="lg-mood-label" id="mood-label">Pick a mood</span>            </div>          </div>        </div>      </div>      <!-- Activity plan -->      <div class="card">        <div class="spread mb" style="margin-bottom:4px">          <h2 style="margin:0;display:flex;align-items:center;gap:8px">Activity plan            ${act ? `<span class="chip neutral">${esc(act.goal)}</span>` : ''}</h2>          ${act ? `<label class="lg-toggle" title="Collapse / expand all weeks"><input type="checkbox" id="toggle-weeks" checked><span class="lg-toggle-slider"></span></label>` : ''}        </div>        ${act ? `          <div class="page-sub">Target ~${act.weeklyTargetMinutes} min/week A� generated ${fmtDateUI(act.generatedAt)}</div>          <div class="mt">          ${act.weeks.map(w => `            <div class="lg-week ${openWeeks.includes(w.week) ? 'open' : ''}" data-week="${w.week}">              <div class="lg-week-head" data-toggle-week="${w.week}">                <span class="lg-week-arrow">${icon('chevron-right', 14)}</span>                <span class="lg-week-num">${w.week}</span>                <span class="lg-week-title">${esc(w.focus)}</span>                <span class="lg-week-chip">${w.items.length} activities</span>              </div>              <div class="lg-week-body">                ${w.items.map((it, ii) => `                  <div class="lg-act-item">                    <button class="lg-act-check" data-act="${w.week}-${ii}" title="Mark done">${icon('check', 12)}</button>                    <span class="lg-act-name">${esc(it.name)}</span>                    <span class="chip ok">${esc(it.detail)}</span>                  </div>                `).join('')}              </div>            </div>`).join('')}          </div>          <div class="disclaimer">${act.safetyNotes.map(esc).join('<br>')}</div>`          : '<div class="empty">No plan yet �?" set your profile and goals, then regenerate.</div>'}      </div>    </div>    <!-- Nutrition plan -->    <div class="card mb">      <div class="spread mb">        <h2 style="display:flex;align-items:center;gap:8px">Nutrition plan          ${nut ? `<span class="chip info">${esc(nut.preference)}${nut.estimatedDailyCalories ? ` A� ~${nut.estimatedDailyCalories} kcal/day` : ''}</span>` : ''}          ${nut?.editedByUser ? '<span class="chip ok" style="font-size:10px">Customized</span>' : ''}        </h2>        <div class="lg-nut-toolbar">          ${nut ? `            <button class="btn sm secondary" id="export-pdf">${iconLabel('file-pdf', 'PDF', 14)}</button>            <button class="btn sm secondary" id="export-json">${iconLabel('save', 'JSON', 14)}</button>            <button class="btn sm" id="regen-nutrition">${iconLabel('refresh', 'Regenerate', 14)}</button>          ` : ''}        </div>      </div>      ${nut ? `        <div class="row mb" style="gap:8px;flex-wrap:wrap">          <span class="chip neutral ic-lbl">${icon('droplet', 12)} ${esc(nut.hydrationTarget)}</span>          <span class="chip neutral ic-lbl">${icon('target', 12)} ${esc(nut.goal)}${nut.tdeeEstimate ? ` A� TDEE ~${nut.tdeeEstimate} kcal` : ''}</span>        </div>        <!-- Day tabs -->        <div class="lg-nut-toolbar mb" id="day-tabs">          ${nut.weekPlan.map((day, di) => `            <button class="lg-day-tab ${di === 0 ? 'active' : ''}" data-day-tab="${di}">${esc(day.day)}</button>          `).join('')}        </div>        <div style="overflow-x:auto">        <table class="tbl" id="nutrition-table"><thead><tr>          <th style="width:60px">Day</th>          <th>Breakfast</th>          <th>Lunch</th>          <th>Dinner</th>          <th>Snacks</th>        </tr></thead>        <tbody>${nut.weekPlan.map((day, di) => `          <tr data-nut-row="${di}" ${di !== 0 ? 'style="display:none"' : ''}>            <td><b>${esc(day.day)}</b>              <div style="margin-top:4px"><button class="btn-icon sm" data-regen-day="${di}" title="Regenerate this day">${icon('refresh', 13)}</button></div>            </td>            <td class="meal-cell" data-day="${di}" data-slot="breakfast">${mealCell(day.breakfast, di, 'breakfast')}</td>            <td class="meal-cell" data-day="${di}" data-slot="lunch">${mealCell(day.lunch, di, 'lunch')}</td>            <td class="meal-cell" data-day="${di}" data-slot="dinner">${mealCell(day.dinner, di, 'dinner')}</td>            <td class="meal-cell" data-day="${di}" data-slot="snacks" style="color:var(--muted);font-size:12.5px">              <span class="meal-text">${esc(day.snacks)}</span>              <button class="btn-icon sm meal-edit-btn" data-day="${di}" data-slot="snacks" title="Edit">${icon('edit', 13)}</button>            </td>          </tr>`).join('')}</tbody></table>        </div>        <!-- All-days view -->        <div id="all-days-view" style="display:none">          <table class="tbl"><thead><tr>            <th style="width:60px">Day</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>Snacks</th>          </tr></thead><tbody>          ${nut.weekPlan.map((day, di) => `            <tr>              <td><b>${esc(day.day)}</b></td>              <td>${esc(Array.isArray(day.breakfast) ? day.breakfast[0] : day.breakfast)}</td>              <td>${esc(Array.isArray(day.lunch) ? day.lunch[0] : day.lunch)}</td>              <td>${esc(Array.isArray(day.dinner) ? day.dinner[0] : day.dinner)}</td>              <td style="color:var(--muted)">${esc(day.snacks)}</td>            </tr>`).join('')}          </tbody></table>        </div>        <div class="disclaimer mt">${nut.notes.map(esc).join('<br>')}          ${nut.lastEditedAt ? `<br><small>Last customized: ${new Date(nut.lastEditedAt).toLocaleString()}</small>` : ''}        </div>`        : '<div class="empty">No nutrition plan yet. Set your profile and goals, then regenerate.</div>'}    </div>`;  /* =================== EXISTING: meal cell =================== */  function mealCell(meal, dayIndex, slot) {    if (slot === 'snacks') {      return `<span class="meal-text">${esc(meal)}</span>        <button class="btn-icon sm meal-edit-btn" data-day="${dayIndex}" data-slot="snacks" title="Edit">${icon('edit', 13)}</button>`;    }    const [name, kcal] = Array.isArray(meal) ? meal : [meal, ''];    return `<span class="meal-text">${esc(name)}<br><small class="tl-detail">${esc(kcal || '')}</small></span>      <div class="meal-actions">        <button class="btn-icon sm meal-edit-btn" data-day="${dayIndex}" data-slot="${slot}" title="Edit this meal">${icon('edit', 13)}</button>        <button class="btn-icon sm meal-swap-btn" data-day="${dayIndex}" data-slot="${slot}" title="Swap with alternative">${icon('refresh', 13)}</button>        <button class="btn-icon sm meal-copy-btn" data-day="${dayIndex}" data-slot="${slot}" title="Copy to another day">${icon('copy', 13)}</button>      </div>`;  }  /* =================== EXISTING: logging forms =================== */  const logTypes = { 'log-ex': 'exercise_minutes', 'log-sl': 'sleep_hours', 'log-hy': 'hydration_liters' };  for (const [id, type] of Object.entries(logTypes)) {    container.querySelector('#' + id).onsubmit = async e => {      e.preventDefault();      const fd = new FormData(e.target);      const val = Number(fd.get('value'));      if (!val || val <= 0) { toast('Enter a value.', 'err'); return; }      try {        await api('/api/lifestyle/logs', { method: 'POST', body: { type, value: val } });        toast('Logged!');        VIEWS.lifestyle(container);      } catch (err) { toast(err.message, 'err'); }    };  }  /* =================== NEW: quick-log buttons =================== */  container.querySelectorAll('[data-quick]').forEach(btn => {    btn.onclick = async () => {      const kind = btn.dataset.quick;      const val = Number(btn.dataset.val);      const typeMap = { ex: 'exercise_minutes', sl: 'sleep_hours', hy: 'hydration_liters' };      try {        await api('/api/lifestyle/logs', { method: 'POST', body: { type: typeMap[kind], value: val } });        toast(`+${val}${kind === 'ex' ? ' min' : kind === 'sl' ? 'h' : 'L'} logged!`);        VIEWS.lifestyle(container);      } catch (e) { toast(e.message, 'err'); }    };  });  /* =================== NEW: mood picker =================== */  let selectedMood = null;  container.querySelectorAll('[data-mood]').forEach(btn => {    btn.onclick = async () => {      const val = Number(btn.dataset.mood);      container.querySelectorAll('[data-mood]').forEach(b => b.classList.remove('selected'));      btn.classList.add('selected');      selectedMood = val;      const label = container.querySelector('#mood-label');      if (label) label.textContent = MOOD_LABEL[val];      try {        await api('/api/lifestyle/logs', { method: 'POST', body: { type: 'mood_score', value: val } });        toast(`Mood check-in recorded: ${MOOD_LABEL[val]}`);        setTimeout(() => VIEWS.lifestyle(container), 600);      } catch (e) { toast(e.message, 'err'); }    };  });  /* =================== EXISTING: mood select (legacy) =================== */  const moodSelect = container.querySelector('#log-mood');  if (moodSelect) {    moodSelect.onchange = async e => {      if (!e.target.value) return;      await api('/api/lifestyle/logs', { method: 'POST', body: { type: 'mood_score', value: Number(e.target.value) } });      toast('Check-in recorded.'); VIEWS.lifestyle(container);    };  }  /* =================== EXISTING: regenerate =================== */  container.querySelector('#regen').onclick = async () => {    await api('/api/lifestyle/regenerate', { method: 'POST' });    toast('Plans regenerated from your latest data.'); VIEWS.lifestyle(container);  };  if (container.querySelector('#regen-nutrition')) {    container.querySelector('#regen-nutrition').onclick = async () => {      await api('/api/lifestyle/regenerate', { method: 'POST' });      toast('Nutrition plan regenerated.'); VIEWS.lifestyle(container);    };  }  /* =================== EXISTING: meal edit buttons =================== */  container.querySelectorAll('.meal-edit-btn').forEach(btn => {    btn.onclick = () => openEditMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);  });  /* =================== EXISTING: meal swap buttons =================== */  container.querySelectorAll('.meal-swap-btn').forEach(btn => {    btn.onclick = () => openSwapMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);  });  /* =================== NEW: meal copy to another day =================== */  container.querySelectorAll('.meal-copy-btn').forEach(btn => {    btn.onclick = () => openCopyMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);  });  /* =================== EXISTING: regenerate single day =================== */  container.querySelectorAll('[data-regen-day]').forEach(btn => {    btn.onclick = async () => {      const dayIndex = Number(btn.dataset.regenDay);      btn.disabled = true;      try {        await api('/api/lifestyle/nutrition/regenerate-day', { method: 'POST', body: { dayIndex } });        toast('Day regenerated.'); VIEWS.lifestyle(container);      } catch (e) { toast(e.message, 'err'); btn.disabled = false; }    };  });  /* =================== EXISTING: PDF Export =================== */  if (container.querySelector('#export-pdf')) {    container.querySelector('#export-pdf').onclick = () => exportNutritionPDF(nut);  }  /* =================== EXISTING: JSON Export =================== */  if (container.querySelector('#export-json')) {    container.querySelector('#export-json').onclick = () => {      const blob = new Blob([JSON.stringify(nut, null, 2)], { type: 'application/json' });      const a = document.createElement('a');      a.href = URL.createObjectURL(blob);      a.download = 'nutrition-plan.json';      a.click();      URL.revokeObjectURL(a.href);      toast('JSON exported.');    };  }  /* =================== NEW: week toggle =================== */  container.querySelectorAll('[data-toggle-week]').forEach(head => {    head.onclick = () => {      const wk = head.parentElement;      wk.classList.toggle('open');      // persist open state
-      const open = [...container.querySelectorAll('.lg-week.open')].map(w => Number(w.dataset.week));      localStorage.setItem('hs_open_weeks', JSON.stringify(open));    };  });  /* =================== NEW: toggle all weeks =================== */  const toggleWeeks = container.querySelector('#toggle-weeks');  if (toggleWeeks) {    toggleWeeks.onchange = () => {      const isOpen = toggleWeeks.checked;      container.querySelectorAll('.lg-week').forEach(w => w.classList.toggle('open', isOpen));      localStorage.setItem('hs_open_weeks', JSON.stringify(isOpen ? [1, 2, 3, 4] : []));    };  }  /* =================== NEW: activity check-off =================== */  const checkedActs = JSON.parse(localStorage.getItem('hs_checked_acts') || '[]');  container.querySelectorAll('.lg-act-check').forEach(btn => {    const key = btn.dataset.act;    if (checkedActs.includes(key)) btn.classList.add('done');    btn.onclick = () => {      btn.classList.toggle('done');      const arr = JSON.parse(localStorage.getItem('hs_checked_acts') || '[]');      const idx = arr.indexOf(key);      if (btn.classList.contains('done')) { if (idx === -1) arr.push(key); }      else if (idx !== -1) arr.splice(idx, 1);      localStorage.setItem('hs_checked_acts', JSON.stringify(arr));    };  });  /* =================== NEW: day tabs (nutrition) =================== */  container.querySelectorAll('[data-day-tab]').forEach(tab => {    tab.onclick = () => {      const di = tab.dataset.dayTab;      container.querySelectorAll('[data-day-tab]').forEach(t => t.classList.remove('active'));      tab.classList.add('active');      // show all rows or specific day
-      if (di === 'all') {        container.querySelectorAll('[data-nut-row]').forEach(r => r.style.display = '');        container.querySelector('#all-days-view').style.display = 'none';      } else {        container.querySelectorAll('[data-nut-row]').forEach(r => {          r.style.display = r.dataset.nutRow === di ? '' : 'none';        });        container.querySelector('#all-days-view').style.display = 'none';      }    };  });  // Add "All" tab
-  const dayTabs = container.querySelector('#day-tabs');  if (dayTabs) {    const allBtn = document.createElement('button');    allBtn.className = 'lg-day-tab';    allBtn.dataset.dayTab = 'all';    allBtn.innerHTML = `${icon('calendar-days', 13)} All`;    allBtn.onclick = () => {      dayTabs.querySelectorAll('[data-day-tab]').forEach(t => t.classList.remove('active'));      allBtn.classList.add('active');      container.querySelectorAll('[data-nut-row]').forEach(r => r.style.display = '');      container.querySelector('#all-days-view').style.display = 'none';    };    dayTabs.appendChild(allBtn);  }  /* =================== NEW: customize targets modal =================== */  container.querySelector('#edit-targets').onclick = () => openTargetsModal(T, () => VIEWS.lifestyle(container));};/* =================== EDIT TARGETS MODAL =================== */function openTargetsModal(current, onSaved) {  const m = openModal(`    <h2 class="ic-lbl">${icon('settings', 20)} Customize Weekly Targets</h2>    <p class="page-sub mb">Set your own goals �?" progress rings update instantly.</p>    <div class="grid g2" style="gap:14px">      <div>        <label class="ic-lbl">${icon('runner', 14, 'primary')} Exercise (min/week)</label>        <input type="number" id="tgt-ex" value="${current.exercise}" min="0" step="10">      </div>      <div>        <label class="ic-lbl">${icon('moon', 14, 'teal')} Sleep (hours/night)</label>        <input type="number" id="tgt-sl" value="${current.sleep}" min="0" max="12" step="0.5">      </div>      <div>        <label class="ic-lbl">${icon('droplet', 14, 'info')} Hydration (L/day)</label>        <input type="number" id="tgt-hy" value="${current.hydration}" min="0" max="6" step="0.1">      </div>      <div>        <label class="ic-lbl">${icon('smile', 14, 'warn')} Mood target (/5)</label>        <input type="number" id="tgt-mood" value="${current.mood}" min="1" max="5" step="0.5">      </div>    </div>    <div class="row mt" style="justify-content:flex-end;gap:8px">      <button class="btn secondary" id="tgt-reset">Reset to defaults</button>      <button class="btn secondary" id="tgt-cancel">Cancel</button>      <button class="btn" id="tgt-save">${iconLabel('check', 'Save targets', 14)}</button>    </div>  `, { wide: true });  m.el.querySelector('#tgt-cancel').onclick = () => m.close();  m.el.querySelector('#tgt-reset').onclick = () => {    localStorage.removeItem('hs_lifestyle_targets');    m.close();    toast('Targets reset to defaults.');    if (onSaved) onSaved();  };  m.el.querySelector('#tgt-save').onclick = () => {    const targets = {      exercise: Number(m.el.querySelector('#tgt-ex').value) || 150,      sleep: Number(m.el.querySelector('#tgt-sl').value) || 7,      hydration: Number(m.el.querySelector('#tgt-hy').value) || 2.5,      mood: Number(m.el.querySelector('#tgt-mood').value) || 4,    };    localStorage.setItem('hs_lifestyle_targets', JSON.stringify(targets));    m.close();    toast('Targets saved!');    if (onSaved) onSaved();  };}/* =================== COPY MEAL TO ANOTHER DAY =================== */async function openCopyMealModal(fromDay, slot, nut) {  const day = nut.weekPlan[fromDay];  const meal = slot === 'snacks' ? day.snacks : (Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '');  const days = nut.weekPlan.map((d, i) => ({ i, label: d.day })).filter(d => d.i !== fromDay);  const m = openModal(`    <h2 class="ic-lbl">${icon('copy', 20)} Copy Meal</h2>    <p class="page-sub mb"><b>${esc(meal)}</b> �?" copy to which day?</p>    <div style="display:flex;flex-direction:column;gap:8px">      ${days.map(d => `        <button class="btn secondary ic-lbl" data-copy-day="${d.i}" style="justify-content:flex-start">          ${icon('calendar', 14)} <span>${esc(d.label)} �?" currently: ${esc(Array.isArray(nut.weekPlan[d.i][slot]) ? nut.weekPlan[d.i][slot][0] : nut.weekPlan[d.i][slot] || '')}</span>        </button>      `).join('')}    </div>    <div class="row mt" style="justify-content:flex-end">      <button class="btn secondary" id="copy-cancel">Cancel</button>    </div>  `, { wide: true });  m.el.querySelector('#copy-cancel').onclick = () => m.close();  m.el.querySelectorAll('[data-copy-day]').forEach(btn => {    btn.onclick = async () => {      const toDay = Number(btn.dataset.copyDay);      const name = slot === 'snacks' ? meal : (Array.isArray(meal) ? meal[0] : meal);      const kcal = slot === 'snacks' ? '' : (Array.isArray(meal) ? meal[1] : '');      try {        await api('/api/lifestyle/nutrition/edit', {          method: 'POST', body: { dayIndex: toDay, slot, name, kcal }        });        toast(`Copied to ${nut.weekPlan[toDay].day}!`);        m.close();        VIEWS.lifestyle(document.getElementById('view'));      } catch (e) { toast(e.message, 'err'); }    };  });}/* =================== EXISTING: EDIT MEAL MODAL =================== */function openEditMealModal(dayIndex, slot, nut) {  const day = nut.weekPlan[dayIndex];  const current = slot === 'snacks' ? day.snacks : (Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '');  const currentKcal = slot === 'snacks' ? '' : (Array.isArray(day[slot]) ? day[slot][1] : '');  const m = openModal(`    <h2>Edit ${day.day} �?" ${slot.charAt(0).toUpperCase() + slot.slice(1)}</h2>    <p class="page-sub mb">Customize this meal to your preference.</p>    <label>Meal name</label>    <input id="edit-meal-name" value="${esc(current)}" placeholder="e.g. Oats with berries">    ${slot !== 'snacks' ? `      <div class="mt"></div>      <label>Approx. calories</label>      <input id="edit-meal-kcal" value="${esc(currentKcal)}" placeholder="e.g. ~350 kcal">    ` : ''}    <div class="row mt" style="justify-content:flex-end">      <button class="btn secondary" id="edit-cancel">Cancel</button>      <button class="btn" id="edit-save">Save</button>    </div>  `, { wide: true });  m.el.querySelector('#edit-cancel').onclick = () => m.close();  m.el.querySelector('#edit-save').onclick = async () => {    const name = m.el.querySelector('#edit-meal-name').value.trim();    const kcal = slot !== 'snacks' ? (m.el.querySelector('#edit-meal-kcal')?.value || '').trim() : '';    if (!name) { toast('Meal name is required.', 'err'); return; }    try {      await api('/api/lifestyle/nutrition/edit', {        method: 'POST', body: { dayIndex, slot, name, kcal }      });      toast('Meal updated.');      m.close();      VIEWS.lifestyle(document.getElementById('view'));    } catch (e) { toast(e.message, 'err'); }  };}/* =================== EXISTING: SWAP MEAL MODAL =================== */async function openSwapMealModal(dayIndex, slot, nut) {  const day = nut.weekPlan[dayIndex];  const currentName = Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '';  let alts = [];  try {    const r = await api(`/api/lifestyle/nutrition/alternatives?slot=${slot}&dayIndex=${dayIndex}`);    alts = r.alternatives || [];  } catch (e) { toast('Could not load alternatives.', 'err'); return; }  if (alts.length === 0) { toast('No alternatives available.', 'err'); return; }  const m = openModal(`    <h2>Swap ${day.day} �?" ${slot.charAt(0).toUpperCase() + slot.slice(1)}</h2>    <p class="page-sub mb">Current: <b>${esc(currentName)}</b> �?" choose a replacement:</p>    <div id="swap-options" style="max-height:350px;overflow-y:auto">      ${alts.map((a, i) => `        <div class="swap-option" data-index="${i}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;transition:all .15s">          <div>            <b style="font-size:13.5px">${esc(a.name)}</b>            <span style="font-size:12px;color:var(--muted);margin-left:6px">${esc(a.kcal)}</span>          </div>          <span style="font-size:18px;color:var(--primary)">�+'</span>        </div>      `).join('')}    </div>    <div class="row mt" style="justify-content:flex-end">      <button class="btn secondary" id="swap-cancel">Cancel</button>    </div>  `, { wide: true });  m.el.querySelector('#swap-cancel').onclick = () => m.close();  m.el.querySelectorAll('.swap-option').forEach(opt => {    opt.onmouseenter = () => { opt.style.borderColor = 'var(--primary)'; opt.style.background = 'var(--accent)'; };    opt.onmouseleave = () => { opt.style.borderColor = 'var(--border)'; opt.style.background = ''; };    opt.onclick = async () => {      const withIndex = alts[Number(opt.dataset.index)]._poolIndex ?? Number(opt.dataset.index);      try {        await api('/api/lifestyle/nutrition/swap', {          method: 'POST', body: { dayIndex, slot, withIndex }        });        toast('Meal swapped!');        m.close();        VIEWS.lifestyle(document.getElementById('view'));      } catch (e) { toast(e.message, 'err'); }    };  });}/* =================== EXISTING: PDF helpers =================== */function loadScriptOnce(src) {  return new Promise((res, rej) => {    if (document.querySelector(`script[src="${src}"]`)) return res();    const s = document.createElement('script'); s.src = src; s.async = false;    s.onload = res; s.onerror = rej; document.head.appendChild(s);  });}async function ensurePdfLibs() {  let ns = window.jspdf || window.jsPDF || window.jspPDF;  if (ns && typeof (ns.jsPDF || ns) === 'function') return ns;  toast('Loading PDF library...', '');  try { await loadScriptOnce('/js/jspdf.umd.min.js'); } catch {}  try { await loadScriptOnce('/js/jspdf.plugin.autotable.min.js'); } catch {}  ns = window.jspdf || window.jsPDF || window.jspPDF;  if (!ns) {    try { await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js'); } catch {}    try { await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js'); } catch {}    ns = window.jspdf || window.jsPDF || window.jspPDF;  }  return ns;}/* =================== EXISTING: PDF EXPORT =================== */async function exportNutritionPDF(nut) {  try {  let ns = window.jspdf || window.jsPDF || window.jspPDF;  if (!ns || typeof (ns.jsPDF || ns) !== 'function') ns = await ensurePdfLibs();  if (!ns) {    toast('PDF library failed to load. Disable ad-blocker and refresh.', 'err');    return;  }  const jsPDF = ns.jsPDF || ns.default?.jsPDF || ns;  if (typeof jsPDF !== 'function') {    toast('PDF library failed to initialize.', 'err');    return;  }  const doc = new jsPDF('p', 'mm', 'a4');  const hasDocAutoTable = typeof doc.autoTable === 'function';  const hasNsAutoTable = typeof (ns.autoTable || window.autoTable) === 'function';  doc.setFontSize(20);  doc.setTextColor(14, 110, 100);  doc.text('HealthSphere AI', 14, 18);  doc.setFontSize(11);  doc.setTextColor(100);  doc.text('Personalized Nutrition Plan', 14, 25);  doc.setFontSize(10);  doc.setTextColor(60);  const prefLabel = nut.preference ? nut.preference.charAt(0).toUpperCase() + nut.preference.slice(1) : 'General';  const lines = [    `Diet preference: ${prefLabel}`,    nut.estimatedDailyCalories ? `Daily calorie target: ~${nut.estimatedDailyCalories} kcal` : '',    nut.tdeeEstimate ? `TDEE estimate: ${nut.tdeeEstimate} kcal` : '',    `Goal: ${nut.goal || 'maintain'}`,    `Hydration target: ${nut.hydrationTarget || '2-2.5 L/day'}`,    nut.editedByUser ? 'Status: Customized by user' : 'Status: AI-generated'  ].filter(Boolean);  let y = 31;  for (const line of lines) { doc.text(line, 14, y); y += 5; }  y += 2;  const headers = [['Day', 'Breakfast', 'Lunch', 'Dinner', 'Snacks']];  const rows = nut.weekPlan.map(d => [    d.day,    Array.isArray(d.breakfast) ? `${d.breakfast[0]} (${d.breakfast[1] || ''})` : d.breakfast || '',    Array.isArray(d.lunch) ? `${d.lunch[0]} (${d.lunch[1] || ''})` : d.lunch || '',    Array.isArray(d.dinner) ? `${d.dinner[0]} (${d.dinner[1] || ''})` : d.dinner || '',    d.snacks || ''  ]);  const tableOpts = {    startY: y,    head: headers,    body: rows,    theme: 'grid',    headStyles: { fillColor: [14, 110, 100], textColor: 255, fontSize: 9, fontStyle: 'bold' },    bodyStyles: { fontSize: 8.5, textColor: 40 },    columnStyles: { 0: { cellWidth: 18, fontStyle: 'bold' }, 4: { cellWidth: 35, textColor: [120, 120, 120] } },    margin: { left: 14, right: 14 },    didDrawPage: function (data) {      doc.setFontSize(7);      doc.setTextColor(160);      doc.text('HealthSphere AI - AI-generated nutrition ideas are educational, not medical nutrition therapy.', 14, doc.internal.pageSize.height - 8);    }  };  if (typeof doc.autoTable === 'function') doc.autoTable(tableOpts);  else if (typeof ns.autoTable === 'function') ns.autoTable(doc, tableOpts);  else if (typeof window.autoTable === 'function') window.autoTable(doc, tableOpts);  else {    let ty = y + 6;    doc.setFontSize(9); doc.setTextColor(255);    doc.setFillColor(14,110,100); doc.rect(14, ty-5, 182, 7, 'F');    doc.text(headers[0].join(' | '), 15, ty);    ty += 8; doc.setTextColor(40); doc.setFontSize(8);    rows.forEach(r => { if (ty > 280) { doc.addPage(); ty = 15; } doc.text(r.join(' | ').slice(0,110), 14, ty); ty += 5; });    doc.lastAutoTable = { finalY: ty };  }  y = (doc.lastAutoTable?.finalY || y + 60) + 8;  if (nut.notes && nut.notes.length > 0) {    doc.setFontSize(10);    doc.setTextColor(14, 110, 100);    doc.text('Important Notes', 14, y);    y += 6;    doc.setFontSize(8.5);    doc.setTextColor(80);    for (const note of nut.notes) {      const lines = doc.splitTextToSize(`�?� ${note}`, 175);      for (const line of lines) {        if (y > 275) { doc.addPage(); y = 20; }        doc.text(line, 14, y);        y += 4;      }    }  }  y += 4;  if (y > 265) { doc.addPage(); y = 20; }  doc.setFontSize(9);  doc.setTextColor(14, 110, 100);  doc.text('Plate guide: A� vegetables A� A� protein A� A� whole grains', 14, y);  y += 5;  doc.setFontSize(7.5);  doc.setTextColor(160);  doc.text(`Generated on ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} by HealthSphere AI`, 14, y);  doc.save('HealthSphere-Nutrition-Plan.pdf');  toast('PDF exported successfully!');  } catch (e) {    console.error('PDF export failed', e);    toast('PDF export failed: ' + (e.message || e), 'err');  }}/* =================== REMINDERS VIEW =================== */const REM_TYPES = {  health: { label: 'Health', icon: 'stethoscope', tint: 'primary' },  screening: { label: 'Screening', icon: 'flask', tint: 'purple' },  medication: { label: 'Medication', icon: 'pill', tint: 'rose' },  measurement: { label: 'Measurement', icon: 'trending-up', tint: 'teal' },  lifestyle: { label: 'Lifestyle', icon: 'runner', tint: 'warn' },  appointment: { label: 'Appointment', icon: 'calendar', tint: 'info' }};VIEWS.reminders = async function (container) {  const d = await api('/api/reminders');  let reminders = (d.reminders || []).slice().sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));  let remindersEnabled = localStorage.getItem('hs_rem_enabled') !== 'false';  let filter = localStorage.getItem('hs_rem_filter') || (remindersEnabled ? 'active' : 'all');  function daysUntil(iso) {    const today = new Date(); today.setHours(0, 0, 0, 0);    const due = new Date(iso + 'T00:00:00');    return Math.round((due - today) / 86400000);  }  function dueBadge(r) {    if (r.status !== 'active') return `<span class="chip neutral ic-lbl">${icon(r.status === 'completed' ? 'check-circle' : 'x-circle', 12)} ${r.status === 'completed' ? 'Done' : 'Off'}</span>`;    const n = daysUntil(r.dueDate);    if (n < 0) return `<span class="chip bad ic-lbl">${icon('alert', 12)} ${Math.abs(n)}d overdue</span>`;    if (n === 0) return `<span class="chip warn ic-lbl">${icon('zap', 12)} Due today</span>`;    if (n === 1) return `<span class="chip warn ic-lbl">${icon('clock', 12)} Tomorrow</span>`;    return `<span class="chip ok ic-lbl">${icon('calendar-check', 12)} In ${n}d</span>`;  }  function render() {    const active = reminders.filter(r => r.status === 'active');    const completed = reminders.filter(r => r.status === 'completed');    const disabled = reminders.filter(r => r.status === 'disabled');    let shown;    // If reminders are globally disabled, show a message and skip the list
-    if (!remindersEnabled) {      shown = [];      document.getElementById('rem-enable').checked = false;    } else {      shown = filter === 'active' ? active : filter === 'completed' ? completed : filter === 'disabled' ? disabled : reminders;    }    container.innerHTML = `      <div class="topbar">        <div>          <h1>Reminders</h1>          <div class="page-sub">Screenings, medication, measurements and checkups �?" auto-generated from your signals plus anything you add.</div>          <label class="switch">            <input type="checkbox" id="rem-enable" ${remindersEnabled ? 'checked' : ''}>            <span class="slider"></span>          </label>        </div>      </div>      <div class="kpi-grid mb" style="display:${remindersEnabled ? 'block' : 'none'}">        <div class="vital"><div class="vital-top"><b>Active</b><span class="ic-tint-primary">${icon('bell-ring', 18)}</span></div>          <div class="vital-value">${active.length}</div>          <div class="vital-sub"><span class="vital-trend">${active.filter(r => daysUntil(r.dueDate) < 0).length} overdue</span></div></div>        <div class="vital"><div class="vital-top"><b>Due this week</b><span class="ic-tint-teal">${icon('calendar-days', 18)}</span></div>          <div class="vital-value">${active.filter(r => { const n = daysUntil(r.dueDate); return n >= 0 && n <= 7; }).length}</div>          <div class="vital-sub"><span class="vital-trend">next 7 days</span></div></div>        <div class="vital"><div class="vital-top"><b>Completed</b><span class="ic-tint-ok">${icon('check-circle', 18)}</span></div>          <div class="vital-value">${completed.length}</div>          <div class="vital-sub"><span class="vital-trend">all time</span></div></div>      </div>      <div class="lg-nut-toolbar mb" id="rem-filters">        ${[['active', `bell Active (${active.length})`], ['completed', `check-circle Done (${completed.length})`], ['disabled', `x-circle Off (${disabled.length})`], ['all', `clipboard All (${reminders.length})`]]          .map(([k, l]) => {            const [ic, ...rest] = l.split(' ');            return `<button class="lg-day-tab ${filter === k ? 'active' : ''}" data-filter="${k}">${icon(ic, 13)} ${rest.join(' ')}</button>`;          }).join('')}      </div>      <div class="card">        ${shown.length ? shown.map(r => {          const meta = REM_TYPES[r.type] || REM_TYPES.health;          const overdue = r.status === 'active' && daysUntil(r.dueDate) < 0;          return `          <div class="tl-event ${overdue ? 'rem-overdue' : ''}" data-rem="${r.id}" style="align-items:flex-start">            <div class="ic-tile ${meta.tint}">${icon(meta.icon, 16)}</div>            <div style="flex:1;min-width:0">              <div class="tl-title">${esc(r.title)}${r.repeatable ? ' <span class="chip info" style="font-size:9px">repeats</span>' : ''}${r.source !== 'user' ? ' <span class="chip neutral" style="font-size:9px">auto</span>' : ''}</div>              <div class="tl-detail">${esc(meta.label)} A� due <b>${fmtDateUI(r.dueDate)}</b> ${esc(r.notes || '')}</div>              ${r.actionLog && r.actionLog.length ? `<div class="tl-detail" style="font-size:11px;opacity:.7">Last action: ${esc(r.actionLog[r.actionLog.length - 1].action)}${r.actionLog[r.actionLog.length - 1].detail ? ' (' + esc(r.actionLog[r.actionLog.length - 1].detail) + ')' : ''}</div>` : ''}            </div>            <div class="row" style="gap:6px;flex-shrink:0;flex-wrap:wrap;align-items:center">              ${dueBadge(r)}              ${r.status === 'active' ? `                <button class="btn sm" data-act="complete" data-id="${r.id}" title="Mark done">${icon('check', 13)}</button>                <button class="btn sm secondary" data-snooze="${r.id}" title="Snooze 1 day">+1d</button>                <button class="btn sm secondary" data-snooze3="${r.id}" title="Snooze 3 days">+3d</button>                <button class="btn-icon sm" data-resched="${r.id}" title="Reschedule">${icon('calendar', 13)}</button>                <button class="btn-icon sm" data-act="disable" data-id="${r.id}" title="Turn off">${icon('x-circle', 13)}</button>              ` : r.status === 'completed' ? `                <button class="btn sm secondary ic-lbl" data-act="snooze" data-id="${r.id}" data-days="7" title="Reopen in 7 days">${icon('refresh', 12)} Reopen</button>              ` : `                <button class="btn sm secondary ic-lbl" data-act="snooze" data-id="${r.id}" data-days="1" title="Turn back on">${icon('zap', 12)} On</button>              `}            </div>          </div>`;        }).join('') : emptyState('Nothing here', filter === 'active' ? 'No active reminders. Add one or regenerate from insights.' : 'No reminders in this view.', { icon: 'bell' })}      </div>`;    /* filters */    container.querySelectorAll('[data-filter]').forEach(b => {      b.onclick = () => { filter = b.dataset.filter; localStorage.setItem('hs_rem_filter', filter); render(); };    });    /* actions */    container.querySelectorAll('[data-act]').forEach(b => {      b.onclick = async () => {        b.disabled = true;        try {          await api(`/api/reminders/${b.dataset.id}/action`, { method: 'POST', body: { action: b.dataset.act, days: Number(b.dataset.days) || undefined } });          toast(b.dataset.act === 'complete' ? 'Marked done.' : 'Reminder turned off.');          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();        } catch (e) { toast(e.message, 'err'); b.disabled = false; }      };    });    /* quick snooze */    container.querySelectorAll('[data-snooze],[data-snooze3]').forEach(b => {      b.onclick = async () => {        const id = b.dataset.snooze || b.dataset.snooze3;        const days = b.dataset.snooze ? 1 : 3;        try {          await api(`/api/reminders/${id}/action`, { method: 'POST', body: { action: 'snooze', days } });          toast(`Snoozed +${days}d`);          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();        } catch (e) { toast(e.message, 'err'); }      };    });    /* reschedule */    container.querySelectorAll('[data-resched]').forEach(b => {      b.onclick = () => {        const id = b.dataset.resched;        const rem = reminders.find(x => x.id === id);        const m = openModal(`          <h2 class="ic-lbl">${icon('calendar', 20)} Reschedule</h2>          <p class="page-sub mb">${esc(rem.title)}</p>          <label>New due date</label>          <input type="date" id="rs-date" value="${rem.dueDate}">          <div class="row mt" style="justify-content:flex-end;gap:8px">            <button class="btn secondary" id="rs-cancel">Cancel</button>            <button class="btn" id="rs-save">${iconLabel('check', 'Save', 14)}</button>          </div>`);        m.el.querySelector('#rs-cancel').onclick = () => m.close();        m.el.querySelector('#rs-save').onclick = async () => {          const date = m.el.querySelector('#rs-date').value;          if (!date) { toast('Pick a date.', 'err'); return; }          try {            await api(`/api/reminders/${id}/action`, { method: 'POST', body: { action: 'reschedule', date } });            toast('Rescheduled.'); m.close();            const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();          } catch (e) { toast(e.message, 'err'); }        };      };    });    /* add reminder */    container.querySelector('#add-rem').onclick = () => {      const m = openModal(`        <h2 class="ic-lbl">${icon('bell-ring', 20)} New reminder</h2>        <label>Title</label>        <input id="nr-title" placeholder="e.g. Book annual eye exam" maxlength="140">        <div class="grid g2 mt" style="gap:12px">          <div><label>Type</label>            <select id="nr-type">${Object.entries(REM_TYPES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></div>          <div><label>Due date</label>            <input type="date" id="nr-date" value="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}"></div>        </div>        <div class="mt"></div>        <label>Notes (optional)</label>        <input id="nr-notes" placeholder="Anything to remember" maxlength="300">        <div class="mt row" style="gap:8px;align-items:center">          <label style="margin:0"><input type="checkbox" id="nr-repeat"> Repeat weekly</label>        </div>        <div class="row mt" style="justify-content:flex-end;gap:8px">          <button class="btn secondary" id="nr-cancel">Cancel</button>          <button class="btn" id="nr-save">${iconLabel('plus', 'Add reminder', 14)}</button>        </div>`, { wide: false });      m.el.querySelector('#nr-cancel').onclick = () => m.close();      m.el.querySelector('#nr-save').onclick = async () => {        const title = m.el.querySelector('#nr-title').value.trim();        if (!title) { toast('Title is required.', 'err'); return; }        try {          await api('/api/reminders', {            method: 'POST',            body: {              title,              type: m.el.querySelector('#nr-type').value,              dueDate: m.el.querySelector('#nr-date').value,              notes: m.el.querySelector('#nr-notes').value.trim(),              repeatable: m.el.querySelector('#nr-repeat').checked            }          });          toast('Reminder added.'); m.close();          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();        } catch (e) { toast(e.message, 'err'); }      };    };  }  render();const el = document.getElementById('rem-enable');if (el) {  el.onchange = () => {    remindersEnabled = !remindersEnabled;    localStorage.setItem('hs_rem_enabled', remindersEnabled ? 'true' : 'false');    render();  };};};
+/* ---------- Lifestyle hub + Reminders ---------- */
+
+VIEWS.lifestyle = async function (container) {
+  const d = await api('/api/lifestyle');
+  const wi = d.weeklyInsight;
+  const act = d.plans.activity, nut = d.plans.nutrition;
+  const logs = d.logs || [];
+
+  /* ---- compute weekly aggregates from logs ---- */
+  const now = Date.now();
+  const weekAgo = now - 7 * 86400000;
+  const twoWeeksAgo = now - 14 * 86400000;
+  const inRange = (iso, from, to) => { const t = new Date(iso).getTime(); return t >= from && t < to; };
+  const sumType = (type, from, to) => logs.filter(l => l.type === type && inRange(l.date, from, to)).reduce((a, b) => a + Number(b.value || 0), 0);
+  const avgType = (type, from, to) => { const arr = logs.filter(l => l.type === type && inRange(l.date, from, to)); return arr.length ? arr.reduce((a, b) => a + Number(b.value || 0), 0) / arr.length : null; };
+
+  const exCur = sumType('exercise_minutes', weekAgo, now);
+  const exPrev = sumType('exercise_minutes', twoWeeksAgo, weekAgo);
+  const slCur = avgType('sleep_hours', weekAgo, now);
+  const hyCur = avgType('hydration_liters', weekAgo, now);
+  const moodCur = avgType('mood_score', weekAgo, now);
+
+  /* ---- streak: consecutive days with any log ---- */
+  const logDates = new Set(logs.map(l => String(l.date).slice(0, 10)));
+  let streak = 0;
+  for (let i = 0; i < 365; i++) {
+    const dstr = new Date(now - i * 86400000).toISOString().slice(0, 10);
+    if (logDates.has(dstr)) streak++;
+    else if (i > 0) break;
+  }
+
+  /* ---- weekly targets (customizable, defaults match plan) ---- */
+  const targets = JSON.parse(localStorage.getItem('hs_lifestyle_targets') || '{}');
+  const T = {
+    exercise: targets.exercise || (act?.weeklyTargetMinutes || 150),
+    sleep: targets.sleep || 7,
+    hydration: targets.hydration || 2.5,
+    mood: targets.mood || 4,
+  };
+
+  /* ---- sparkline data (last 14 entries per type) ---- */
+  function sparkPoints(type, maxPoints = 14) {
+    const arr = logs.filter(l => l.type === type).slice().sort((a, b) => a.date < b.date ? -1 : 1).slice(-maxPoints);
+    if (arr.length < 2) return null;
+    const vals = arr.map(l => Number(l.value));
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const range = max - min || 1;
+    return vals.map((v, i) => `${(i / (vals.length - 1) * 40).toFixed(1)},${(20 - ((v - min) / range) * 18).toFixed(1)}`).join(' ');
+  }
+  function sparkSVG(type, color) {
+    const pts = sparkPoints(type);
+    if (!pts) return '';
+    return `<span class="lg-spark"><svg width="42" height="22" viewBox="0 0 42 22"><polyline points="${pts}" stroke="${color}"/></svg></span>`;
+  }
+
+  /* ---- progress ring helper ---- */
+  function ring(cur, target, color, label, unit, icon) {
+    const pct = Math.min(1, (cur || 0) / target);
+    const r = 30, c = 2 * Math.PI * r;
+    const offset = c * (1 - pct);
+    const col = pct >= 1 ? 'var(--ok)' : pct >= 0.6 ? color : 'var(--warn)';
+    return `<div class="lg-ring-item">
+      <div class="lg-ring">
+        <svg viewBox="0 0 72 72">
+          <circle class="lg-ring-bg" cx="36" cy="36" r="${r}"/>
+          <circle class="lg-ring-fg" cx="36" cy="36" r="${r}" stroke="${col}" stroke-dasharray="${c}" stroke-dashoffset="${offset}"/>
+        </svg>
+        <div class="lg-ring-center"><b>${icon}</b><small>${cur != null ? Math.round(cur) : '–'}</small></div>
+      </div>
+      <div class="lg-ring-label">${label}</div>
+      <div class="lg-ring-target">/ ${target}${unit}</div>
+    </div>`;
+  }
+
+  /* ---- mood icons map ---- */
+  const MOOD_ICON = { 1: 'frown', 2: 'meh', 3: 'meh', 4: 'smile', 5: 'laugh' };
+  const MOOD_LABEL = { 1: 'Very low', 2: 'Low', 3: 'Neutral', 4: 'Good', 5: 'Very good' };
+
+  /* ---- activity plan week state ---- */
+  const openWeeks = JSON.parse(localStorage.getItem('hs_open_weeks') || '[1]');
+
+  container.innerHTML = `
+    <div class="topbar"><div><h1>Lifestyle Hub</h1>
+      <div class="page-sub">Exercise, nutrition, sleep and hydration — personalized plans that adapt to your health graph.</div></div>
+      <div class="row" style="gap:8px;flex-shrink:0">
+        ${streak > 0 ? `<span class="lg-streak ${streak >= 7 ? 'fire' : ''}">${icon('flame', 14)} ${streak}-day streak</span>` : ''}
+        <button class="btn secondary" id="regen">${iconLabel('refresh', 'Regenerate plans', 15)}</button>
+      </div></div>
+
+    <!-- Progress rings -->
+    <div class="lg-rings mb">
+      ${ring(exCur, T.exercise, 'var(--primary)', 'Exercise', ' min', icon('runner', 20))}
+      ${ring(slCur != null ? Math.round(slCur * 10) / 10 : null, T.sleep, 'var(--teal)', 'Sleep', ' h', icon('moon', 20))}
+      ${ring(hyCur != null ? Math.round(hyCur * 10) / 10 : null, T.hydration, '#3B82F6', 'Water', ' L', icon('droplet', 20))}
+      ${ring(moodCur != null ? Math.round(moodCur * 10) / 10 : null, T.mood, '#F59E0B', 'Mood', '/5', icon('smile', 20))}
+    </div>
+
+    <div class="grid g2 mb">
+      <!-- Weekly insight + logging -->
+      <div class="card">
+        <div class="spread mb" style="margin-bottom:4px">
+          <h2 style="margin:0">This week vs last week</h2>
+          <button class="btn-icon" id="edit-targets" title="Customize weekly targets">${icon('settings', 16)}</button>
+        </div>
+        ${wi.hasData ? `
+          ${wi.insights.map(i => {
+            const icons = { Exercise: ['runner', 'primary'], Sleep: ['moon', 'teal'], Hydration: ['droplet', 'info'], 'Self-reported wellbeing': ['smile', 'warn'], Weight: ['scale', 'purple'] };
+            const spark = { Exercise: sparkSVG('exercise_minutes', '#0057B8'), Sleep: sparkSVG('sleep_hours', '#0E7C6B'), Hydration: sparkSVG('hydration_liters', '#3B82F6'), 'Self-reported wellbeing': sparkSVG('mood_score', '#F59E0B') };
+            const [ic, tint] = icons[i.area] || ['bar-chart', 'muted'];
+            return `<div class="lg-metric">
+              <div class="lg-metric-left">
+                <div class="ic-tile ${tint}">${icon(ic, 16)}</div>
+                <span class="lg-metric-name">${esc(i.area)}</span>
+                ${spark[i.area] || ''}
+              </div>
+              <div class="lg-metric-right">
+                <span class="lg-metric-val ${i.good ? 'flag-normal' : 'flag-borderline'}">${esc(i.text)}</span>
+              </div>
+            </div>`;
+          }).join('')}
+          <div class="mt" style="font-size:13.5px;background:var(--primary-soft,#EAF0F8);border-radius:10px;padding:12px 14px;line-height:1.55;display:flex;gap:10px;align-items:flex-start">
+            <span style="color:var(--primary);flex-shrink:0;margin-top:1px">${icon('lightbulb', 16)}</span>
+            <span><b>Recommendation.</b> ${esc(wi.recommendation)}</span></div>`
+          : '<div class="empty">Start logging below — insights appear after a week of data.</div>'}
+
+        <!-- Quick-log section -->
+        <div class="mt" style="border-top:1px solid var(--border);padding-top:14px">
+          <h3 style="margin-bottom:10px">Quick log</h3>
+
+          <!-- Exercise -->
+          <div style="margin-bottom:12px">
+            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('runner', 14, 'primary')} Exercise (minutes)</label>
+            <div class="lg-quick-row">
+              <form id="log-ex" class="row" style="gap:6px;flex:1">
+                <input name="value" type="number" min="0" placeholder="min" style="width:90px" id="ex-input">
+                <button class="btn sm">Log</button>
+              </form>
+              <button class="lg-qbtn" data-quick="ex" data-val="10">+10</button>
+              <button class="lg-qbtn" data-quick="ex" data-val="20">+20</button>
+              <button class="lg-qbtn" data-quick="ex" data-val="30">+30</button>
+              <button class="lg-qbtn" data-quick="ex" data-val="45">+45</button>
+            </div>
+          </div>
+
+          <!-- Sleep -->
+          <div style="margin-bottom:12px">
+            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('moon', 14, 'teal')} Sleep (hours)</label>
+            <div class="lg-quick-row">
+              <form id="log-sl" class="row" style="gap:6px;flex:1">
+                <input name="value" type="number" step="0.5" min="0" placeholder="hours" style="width:90px" id="sl-input">
+                <button class="btn sm">Log</button>
+              </form>
+              <button class="lg-qbtn" data-quick="sl" data-val="5">5h</button>
+              <button class="lg-qbtn" data-quick="sl" data-val="6">6h</button>
+              <button class="lg-qbtn" data-quick="sl" data-val="7">7h</button>
+              <button class="lg-qbtn" data-quick="sl" data-val="8">8h</button>
+            </div>
+          </div>
+
+          <!-- Hydration -->
+          <div style="margin-bottom:12px">
+            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('droplet', 14, 'info')} Water (liters)</label>
+            <div class="lg-quick-row">
+              <form id="log-hy" class="row" style="gap:6px;flex:1">
+                <input name="value" type="number" step="0.1" min="0" placeholder="liters" style="width:90px" id="hy-input">
+                <button class="btn sm">Log</button>
+              </form>
+              <button class="lg-qbtn" data-quick="hy" data-val="0.25">+250ml</button>
+              <button class="lg-qbtn" data-quick="hy" data-val="0.5">+500ml</button>
+              <button class="lg-qbtn" data-quick="hy" data-val="1">+1L</button>
+            </div>
+          </div>
+
+          <!-- Mood -->
+          <div>
+            <label style="margin-bottom:6px;display:flex;align-items:center;gap:6px">${icon('smile', 14, 'warn')} How do you feel today?</label>
+            <div class="lg-mood-picker" id="mood-picker">
+              ${[1, 2, 3, 4, 5].map(v => `
+                <button class="mood-face" data-mood="${v}" title="${MOOD_LABEL[v]}">${icon(MOOD_ICON[v], 22)}</button>
+              `).join('')}
+              <span class="lg-mood-label" id="mood-label">Pick a mood</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity plan -->
+      <div class="card">
+        <div class="spread mb" style="margin-bottom:4px">
+          <h2 style="margin:0;display:flex;align-items:center;gap:8px">Activity plan
+            ${act ? `<span class="chip neutral">${esc(act.goal)}</span>` : ''}</h2>
+          ${act ? `<label class="lg-toggle" title="Collapse / expand all weeks"><input type="checkbox" id="toggle-weeks" checked><span class="lg-toggle-slider"></span></label>` : ''}
+        </div>
+        ${act ? `
+          <div class="page-sub">Target ~${act.weeklyTargetMinutes} min/week · generated ${fmtDateUI(act.generatedAt)}</div>
+          <div class="mt">
+          ${act.weeks.map(w => `
+            <div class="lg-week ${openWeeks.includes(w.week) ? 'open' : ''}" data-week="${w.week}">
+              <div class="lg-week-head" data-toggle-week="${w.week}">
+                <span class="lg-week-arrow">${icon('chevron-right', 14)}</span>
+                <span class="lg-week-num">${w.week}</span>
+                <span class="lg-week-title">${esc(w.focus)}</span>
+                <span class="lg-week-chip">${w.items.length} activities</span>
+              </div>
+              <div class="lg-week-body">
+                ${w.items.map((it, ii) => `
+                  <div class="lg-act-item">
+                    <button class="lg-act-check" data-act="${w.week}-${ii}" title="Mark done">${icon('check', 12)}</button>
+                    <span class="lg-act-name">${esc(it.name)}</span>
+                    <span class="chip ok">${esc(it.detail)}</span>
+                  </div>
+                `).join('')}
+              </div>
+            </div>`).join('')}
+          </div>
+          <div class="disclaimer">${act.safetyNotes.map(esc).join('<br>')}</div>`
+          : '<div class="empty">No plan yet — set your profile and goals, then regenerate.</div>'}
+      </div>
+    </div>
+
+    <!-- Nutrition plan -->
+    <div class="card mb">
+      <div class="spread mb">
+        <h2 style="display:flex;align-items:center;gap:8px">Nutrition plan
+          ${nut ? `<span class="chip info">${esc(nut.preference)}${nut.estimatedDailyCalories ? ` · ~${nut.estimatedDailyCalories} kcal/day` : ''}</span>` : ''}
+          ${nut?.editedByUser ? '<span class="chip ok" style="font-size:10px">Customized</span>' : ''}
+        </h2>
+        <div class="lg-nut-toolbar">
+          ${nut ? `
+            <button class="btn sm secondary" id="export-pdf">${iconLabel('file-pdf', 'PDF', 14)}</button>
+            <button class="btn sm secondary" id="export-json">${iconLabel('save', 'JSON', 14)}</button>
+            <button class="btn sm" id="regen-nutrition">${iconLabel('refresh', 'Regenerate', 14)}</button>
+          ` : ''}
+        </div>
+      </div>
+      ${nut ? `
+        <div class="row mb" style="gap:8px;flex-wrap:wrap">
+          <span class="chip neutral ic-lbl">${icon('droplet', 12)} ${esc(nut.hydrationTarget)}</span>
+          <span class="chip neutral ic-lbl">${icon('target', 12)} ${esc(nut.goal)}${nut.tdeeEstimate ? ` · TDEE ~${nut.tdeeEstimate} kcal` : ''}</span>
+        </div>
+
+        <!-- Day tabs -->
+        <div class="lg-nut-toolbar mb" id="day-tabs">
+          ${nut.weekPlan.map((day, di) => `
+            <button class="lg-day-tab ${di === 0 ? 'active' : ''}" data-day-tab="${di}">${esc(day.day)}</button>
+          `).join('')}
+        </div>
+
+        <div style="overflow-x:auto">
+        <table class="tbl" id="nutrition-table"><thead><tr>
+          <th style="width:60px">Day</th>
+          <th>Breakfast</th>
+          <th>Lunch</th>
+          <th>Dinner</th>
+          <th>Snacks</th>
+        </tr></thead>
+        <tbody>${nut.weekPlan.map((day, di) => `
+          <tr data-nut-row="${di}" ${di !== 0 ? 'style="display:none"' : ''}>
+            <td><b>${esc(day.day)}</b>
+              <div style="margin-top:4px"><button class="btn-icon sm" data-regen-day="${di}" title="Regenerate this day">${icon('refresh', 13)}</button></div>
+            </td>
+            <td class="meal-cell" data-day="${di}" data-slot="breakfast">${mealCell(day.breakfast, di, 'breakfast')}</td>
+            <td class="meal-cell" data-day="${di}" data-slot="lunch">${mealCell(day.lunch, di, 'lunch')}</td>
+            <td class="meal-cell" data-day="${di}" data-slot="dinner">${mealCell(day.dinner, di, 'dinner')}</td>
+            <td class="meal-cell" data-day="${di}" data-slot="snacks" style="color:var(--muted);font-size:12.5px">
+              <span class="meal-text">${esc(day.snacks)}</span>
+              <button class="btn-icon sm meal-edit-btn" data-day="${di}" data-slot="snacks" title="Edit">${icon('edit', 13)}</button>
+            </td>
+          </tr>`).join('')}</tbody></table>
+        </div>
+
+        <!-- All-days view -->
+        <div id="all-days-view" style="display:none">
+          <table class="tbl"><thead><tr>
+            <th style="width:60px">Day</th><th>Breakfast</th><th>Lunch</th><th>Dinner</th><th>Snacks</th>
+          </tr></thead><tbody>
+          ${nut.weekPlan.map((day, di) => `
+            <tr>
+              <td><b>${esc(day.day)}</b></td>
+              <td>${esc(Array.isArray(day.breakfast) ? day.breakfast[0] : day.breakfast)}</td>
+              <td>${esc(Array.isArray(day.lunch) ? day.lunch[0] : day.lunch)}</td>
+              <td>${esc(Array.isArray(day.dinner) ? day.dinner[0] : day.dinner)}</td>
+              <td style="color:var(--muted)">${esc(day.snacks)}</td>
+            </tr>`).join('')}
+          </tbody></table>
+        </div>
+
+        <div class="disclaimer mt">${nut.notes.map(esc).join('<br>')}
+          ${nut.lastEditedAt ? `<br><small>Last customized: ${new Date(nut.lastEditedAt).toLocaleString()}</small>` : ''}
+        </div>`
+        : '<div class="empty">No nutrition plan yet. Set your profile and goals, then regenerate.</div>'}
+    </div>`;
+
+  /* =================== EXISTING: meal cell =================== */
+  function mealCell(meal, dayIndex, slot) {
+    if (slot === 'snacks') {
+      return `<span class="meal-text">${esc(meal)}</span>
+        <button class="btn-icon sm meal-edit-btn" data-day="${dayIndex}" data-slot="snacks" title="Edit">${icon('edit', 13)}</button>`;
+    }
+    const [name, kcal] = Array.isArray(meal) ? meal : [meal, ''];
+    return `<span class="meal-text">${esc(name)}<br><small class="tl-detail">${esc(kcal || '')}</small></span>
+      <div class="meal-actions">
+        <button class="btn-icon sm meal-edit-btn" data-day="${dayIndex}" data-slot="${slot}" title="Edit this meal">${icon('edit', 13)}</button>
+        <button class="btn-icon sm meal-swap-btn" data-day="${dayIndex}" data-slot="${slot}" title="Swap with alternative">${icon('refresh', 13)}</button>
+        <button class="btn-icon sm meal-copy-btn" data-day="${dayIndex}" data-slot="${slot}" title="Copy to another day">${icon('copy', 13)}</button>
+      </div>`;
+  }
+
+  /* =================== EXISTING: logging forms =================== */
+  const logTypes = { 'log-ex': 'exercise_minutes', 'log-sl': 'sleep_hours', 'log-hy': 'hydration_liters' };
+  for (const [id, type] of Object.entries(logTypes)) {
+    container.querySelector('#' + id).onsubmit = async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const val = Number(fd.get('value'));
+      if (!val || val <= 0) { toast('Enter a value.', 'err'); return; }
+      try {
+        await api('/api/lifestyle/logs', { method: 'POST', body: { type, value: val } });
+        toast('Logged!');
+        VIEWS.lifestyle(container);
+      } catch (err) { toast(err.message, 'err'); }
+    };
+  }
+
+  /* =================== NEW: quick-log buttons =================== */
+  container.querySelectorAll('[data-quick]').forEach(btn => {
+    btn.onclick = async () => {
+      const kind = btn.dataset.quick;
+      const val = Number(btn.dataset.val);
+      const typeMap = { ex: 'exercise_minutes', sl: 'sleep_hours', hy: 'hydration_liters' };
+      try {
+        await api('/api/lifestyle/logs', { method: 'POST', body: { type: typeMap[kind], value: val } });
+        toast(`+${val}${kind === 'ex' ? ' min' : kind === 'sl' ? 'h' : 'L'} logged!`);
+        VIEWS.lifestyle(container);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+
+  /* =================== NEW: mood picker =================== */
+  let selectedMood = null;
+  container.querySelectorAll('[data-mood]').forEach(btn => {
+    btn.onclick = async () => {
+      const val = Number(btn.dataset.mood);
+      container.querySelectorAll('[data-mood]').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      selectedMood = val;
+      const label = container.querySelector('#mood-label');
+      if (label) label.textContent = MOOD_LABEL[val];
+      try {
+        await api('/api/lifestyle/logs', { method: 'POST', body: { type: 'mood_score', value: val } });
+        toast(`Mood check-in recorded: ${MOOD_LABEL[val]}`);
+        setTimeout(() => VIEWS.lifestyle(container), 600);
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+
+  /* =================== EXISTING: mood select (legacy) =================== */
+  const moodSelect = container.querySelector('#log-mood');
+  if (moodSelect) {
+    moodSelect.onchange = async e => {
+      if (!e.target.value) return;
+      await api('/api/lifestyle/logs', { method: 'POST', body: { type: 'mood_score', value: Number(e.target.value) } });
+      toast('Check-in recorded.'); VIEWS.lifestyle(container);
+    };
+  }
+
+  /* =================== EXISTING: regenerate =================== */
+  container.querySelector('#regen').onclick = async () => {
+    await api('/api/lifestyle/regenerate', { method: 'POST' });
+    toast('Plans regenerated from your latest data.'); VIEWS.lifestyle(container);
+  };
+  if (container.querySelector('#regen-nutrition')) {
+    container.querySelector('#regen-nutrition').onclick = async () => {
+      await api('/api/lifestyle/regenerate', { method: 'POST' });
+      toast('Nutrition plan regenerated.'); VIEWS.lifestyle(container);
+    };
+  }
+
+  /* =================== EXISTING: meal edit buttons =================== */
+  container.querySelectorAll('.meal-edit-btn').forEach(btn => {
+    btn.onclick = () => openEditMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);
+  });
+
+  /* =================== EXISTING: meal swap buttons =================== */
+  container.querySelectorAll('.meal-swap-btn').forEach(btn => {
+    btn.onclick = () => openSwapMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);
+  });
+
+  /* =================== NEW: meal copy to another day =================== */
+  container.querySelectorAll('.meal-copy-btn').forEach(btn => {
+    btn.onclick = () => openCopyMealModal(Number(btn.dataset.day), btn.dataset.slot, nut);
+  });
+
+  /* =================== EXISTING: regenerate single day =================== */
+  container.querySelectorAll('[data-regen-day]').forEach(btn => {
+    btn.onclick = async () => {
+      const dayIndex = Number(btn.dataset.regenDay);
+      btn.disabled = true;
+      try {
+        await api('/api/lifestyle/nutrition/regenerate-day', { method: 'POST', body: { dayIndex } });
+        toast('Day regenerated.'); VIEWS.lifestyle(container);
+      } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+    };
+  });
+
+  /* =================== EXISTING: PDF Export =================== */
+  if (container.querySelector('#export-pdf')) {
+    container.querySelector('#export-pdf').onclick = () => exportNutritionPDF(nut);
+  }
+
+  /* =================== EXISTING: JSON Export =================== */
+  if (container.querySelector('#export-json')) {
+    container.querySelector('#export-json').onclick = () => {
+      const blob = new Blob([JSON.stringify(nut, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'nutrition-plan.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('JSON exported.');
+    };
+  }
+
+  /* =================== NEW: week toggle =================== */
+  container.querySelectorAll('[data-toggle-week]').forEach(head => {
+    head.onclick = () => {
+      const wk = head.parentElement;
+      wk.classList.toggle('open');
+      // persist open state
+      const open = [...container.querySelectorAll('.lg-week.open')].map(w => Number(w.dataset.week));
+      localStorage.setItem('hs_open_weeks', JSON.stringify(open));
+    };
+  });
+
+  /* =================== NEW: toggle all weeks =================== */
+  const toggleWeeks = container.querySelector('#toggle-weeks');
+  if (toggleWeeks) {
+    toggleWeeks.onchange = () => {
+      const isOpen = toggleWeeks.checked;
+      container.querySelectorAll('.lg-week').forEach(w => w.classList.toggle('open', isOpen));
+      localStorage.setItem('hs_open_weeks', JSON.stringify(isOpen ? [1, 2, 3, 4] : []));
+    };
+  }
+
+  /* =================== NEW: activity check-off =================== */
+  const checkedActs = JSON.parse(localStorage.getItem('hs_checked_acts') || '[]');
+  container.querySelectorAll('.lg-act-check').forEach(btn => {
+    const key = btn.dataset.act;
+    if (checkedActs.includes(key)) btn.classList.add('done');
+    btn.onclick = () => {
+      btn.classList.toggle('done');
+      const arr = JSON.parse(localStorage.getItem('hs_checked_acts') || '[]');
+      const idx = arr.indexOf(key);
+      if (btn.classList.contains('done')) { if (idx === -1) arr.push(key); }
+      else if (idx !== -1) arr.splice(idx, 1);
+      localStorage.setItem('hs_checked_acts', JSON.stringify(arr));
+    };
+  });
+
+  /* =================== NEW: day tabs (nutrition) =================== */
+  container.querySelectorAll('[data-day-tab]').forEach(tab => {
+    tab.onclick = () => {
+      const di = tab.dataset.dayTab;
+      container.querySelectorAll('[data-day-tab]').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      // show all rows or specific day
+      if (di === 'all') {
+        container.querySelectorAll('[data-nut-row]').forEach(r => r.style.display = '');
+        container.querySelector('#all-days-view').style.display = 'none';
+      } else {
+        container.querySelectorAll('[data-nut-row]').forEach(r => {
+          r.style.display = r.dataset.nutRow === di ? '' : 'none';
+        });
+        container.querySelector('#all-days-view').style.display = 'none';
+      }
+    };
+  });
+  // Add "All" tab
+  const dayTabs = container.querySelector('#day-tabs');
+  if (dayTabs) {
+    const allBtn = document.createElement('button');
+    allBtn.className = 'lg-day-tab';
+    allBtn.dataset.dayTab = 'all';
+    allBtn.innerHTML = `${icon('calendar-days', 13)} All`;
+    allBtn.onclick = () => {
+      dayTabs.querySelectorAll('[data-day-tab]').forEach(t => t.classList.remove('active'));
+      allBtn.classList.add('active');
+      container.querySelectorAll('[data-nut-row]').forEach(r => r.style.display = '');
+      container.querySelector('#all-days-view').style.display = 'none';
+    };
+    dayTabs.appendChild(allBtn);
+  }
+
+  /* =================== NEW: customize targets modal =================== */
+  container.querySelector('#edit-targets').onclick = () => openTargetsModal(T, () => VIEWS.lifestyle(container));
+};
+
+/* =================== EDIT TARGETS MODAL =================== */
+function openTargetsModal(current, onSaved) {
+  const m = openModal(`
+    <h2 class="ic-lbl">${icon('settings', 20)} Customize Weekly Targets</h2>
+    <p class="page-sub mb">Set your own goals — progress rings update instantly.</p>
+    <div class="grid g2" style="gap:14px">
+      <div>
+        <label class="ic-lbl">${icon('runner', 14, 'primary')} Exercise (min/week)</label>
+        <input type="number" id="tgt-ex" value="${current.exercise}" min="0" step="10">
+      </div>
+      <div>
+        <label class="ic-lbl">${icon('moon', 14, 'teal')} Sleep (hours/night)</label>
+        <input type="number" id="tgt-sl" value="${current.sleep}" min="0" max="12" step="0.5">
+      </div>
+      <div>
+        <label class="ic-lbl">${icon('droplet', 14, 'info')} Hydration (L/day)</label>
+        <input type="number" id="tgt-hy" value="${current.hydration}" min="0" max="6" step="0.1">
+      </div>
+      <div>
+        <label class="ic-lbl">${icon('smile', 14, 'warn')} Mood target (/5)</label>
+        <input type="number" id="tgt-mood" value="${current.mood}" min="1" max="5" step="0.5">
+      </div>
+    </div>
+    <div class="row mt" style="justify-content:flex-end;gap:8px">
+      <button class="btn secondary" id="tgt-reset">Reset to defaults</button>
+      <button class="btn secondary" id="tgt-cancel">Cancel</button>
+      <button class="btn" id="tgt-save">${iconLabel('check', 'Save targets', 14)}</button>
+    </div>
+  `, { wide: true });
+
+  m.el.querySelector('#tgt-cancel').onclick = () => m.close();
+  m.el.querySelector('#tgt-reset').onclick = () => {
+    localStorage.removeItem('hs_lifestyle_targets');
+    m.close();
+    toast('Targets reset to defaults.');
+    if (onSaved) onSaved();
+  };
+  m.el.querySelector('#tgt-save').onclick = () => {
+    const targets = {
+      exercise: Number(m.el.querySelector('#tgt-ex').value) || 150,
+      sleep: Number(m.el.querySelector('#tgt-sl').value) || 7,
+      hydration: Number(m.el.querySelector('#tgt-hy').value) || 2.5,
+      mood: Number(m.el.querySelector('#tgt-mood').value) || 4,
+    };
+    localStorage.setItem('hs_lifestyle_targets', JSON.stringify(targets));
+    m.close();
+    toast('Targets saved!');
+    if (onSaved) onSaved();
+  };
+}
+
+/* =================== COPY MEAL TO ANOTHER DAY =================== */
+async function openCopyMealModal(fromDay, slot, nut) {
+  const day = nut.weekPlan[fromDay];
+  const meal = slot === 'snacks' ? day.snacks : (Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '');
+  const days = nut.weekPlan.map((d, i) => ({ i, label: d.day })).filter(d => d.i !== fromDay);
+
+  const m = openModal(`
+    <h2 class="ic-lbl">${icon('copy', 20)} Copy Meal</h2>
+    <p class="page-sub mb"><b>${esc(meal)}</b> — copy to which day?</p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${days.map(d => `
+        <button class="btn secondary ic-lbl" data-copy-day="${d.i}" style="justify-content:flex-start">
+          ${icon('calendar', 14)} <span>${esc(d.label)} — currently: ${esc(Array.isArray(nut.weekPlan[d.i][slot]) ? nut.weekPlan[d.i][slot][0] : nut.weekPlan[d.i][slot] || '')}</span>
+        </button>
+      `).join('')}
+    </div>
+    <div class="row mt" style="justify-content:flex-end">
+      <button class="btn secondary" id="copy-cancel">Cancel</button>
+    </div>
+  `, { wide: true });
+
+  m.el.querySelector('#copy-cancel').onclick = () => m.close();
+  m.el.querySelectorAll('[data-copy-day]').forEach(btn => {
+    btn.onclick = async () => {
+      const toDay = Number(btn.dataset.copyDay);
+      const name = slot === 'snacks' ? meal : (Array.isArray(meal) ? meal[0] : meal);
+      const kcal = slot === 'snacks' ? '' : (Array.isArray(meal) ? meal[1] : '');
+      try {
+        await api('/api/lifestyle/nutrition/edit', {
+          method: 'POST', body: { dayIndex: toDay, slot, name, kcal }
+        });
+        toast(`Copied to ${nut.weekPlan[toDay].day}!`);
+        m.close();
+        VIEWS.lifestyle(document.getElementById('view'));
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+}
+
+/* =================== EXISTING: EDIT MEAL MODAL =================== */
+function openEditMealModal(dayIndex, slot, nut) {
+  const day = nut.weekPlan[dayIndex];
+  const current = slot === 'snacks' ? day.snacks : (Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '');
+  const currentKcal = slot === 'snacks' ? '' : (Array.isArray(day[slot]) ? day[slot][1] : '');
+
+  const m = openModal(`
+    <h2>Edit ${day.day} — ${slot.charAt(0).toUpperCase() + slot.slice(1)}</h2>
+    <p class="page-sub mb">Customize this meal to your preference.</p>
+    <label>Meal name</label>
+    <input id="edit-meal-name" value="${esc(current)}" placeholder="e.g. Oats with berries">
+    ${slot !== 'snacks' ? `
+      <div class="mt"></div>
+      <label>Approx. calories</label>
+      <input id="edit-meal-kcal" value="${esc(currentKcal)}" placeholder="e.g. ~350 kcal">
+    ` : ''}
+    <div class="row mt" style="justify-content:flex-end">
+      <button class="btn secondary" id="edit-cancel">Cancel</button>
+      <button class="btn" id="edit-save">Save</button>
+    </div>
+  `, { wide: true });
+
+  m.el.querySelector('#edit-cancel').onclick = () => m.close();
+  m.el.querySelector('#edit-save').onclick = async () => {
+    const name = m.el.querySelector('#edit-meal-name').value.trim();
+    const kcal = slot !== 'snacks' ? (m.el.querySelector('#edit-meal-kcal')?.value || '').trim() : '';
+    if (!name) { toast('Meal name is required.', 'err'); return; }
+    try {
+      await api('/api/lifestyle/nutrition/edit', {
+        method: 'POST', body: { dayIndex, slot, name, kcal }
+      });
+      toast('Meal updated.');
+      m.close();
+      VIEWS.lifestyle(document.getElementById('view'));
+    } catch (e) { toast(e.message, 'err'); }
+  };
+}
+
+/* =================== EXISTING: SWAP MEAL MODAL =================== */
+async function openSwapMealModal(dayIndex, slot, nut) {
+  const day = nut.weekPlan[dayIndex];
+  const currentName = Array.isArray(day[slot]) ? day[slot][0] : day[slot] || '';
+  let alts = [];
+  try {
+    const r = await api(`/api/lifestyle/nutrition/alternatives?slot=${slot}&dayIndex=${dayIndex}`);
+    alts = r.alternatives || [];
+  } catch (e) { toast('Could not load alternatives.', 'err'); return; }
+
+  if (alts.length === 0) { toast('No alternatives available.', 'err'); return; }
+
+  const m = openModal(`
+    <h2>Swap ${day.day} — ${slot.charAt(0).toUpperCase() + slot.slice(1)}</h2>
+    <p class="page-sub mb">Current: <b>${esc(currentName)}</b> — choose a replacement:</p>
+    <div id="swap-options" style="max-height:350px;overflow-y:auto">
+      ${alts.map((a, i) => `
+        <div class="swap-option" data-index="${i}" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;transition:all .15s">
+          <div>
+            <b style="font-size:13.5px">${esc(a.name)}</b>
+            <span style="font-size:12px;color:var(--muted);margin-left:6px">${esc(a.kcal)}</span>
+          </div>
+          <span style="font-size:18px;color:var(--primary)">→</span>
+        </div>
+      `).join('')}
+    </div>
+    <div class="row mt" style="justify-content:flex-end">
+      <button class="btn secondary" id="swap-cancel">Cancel</button>
+    </div>
+  `, { wide: true });
+
+  m.el.querySelector('#swap-cancel').onclick = () => m.close();
+  m.el.querySelectorAll('.swap-option').forEach(opt => {
+    opt.onmouseenter = () => { opt.style.borderColor = 'var(--primary)'; opt.style.background = 'var(--accent)'; };
+    opt.onmouseleave = () => { opt.style.borderColor = 'var(--border)'; opt.style.background = ''; };
+    opt.onclick = async () => {
+      const withIndex = alts[Number(opt.dataset.index)]._poolIndex ?? Number(opt.dataset.index);
+      try {
+        await api('/api/lifestyle/nutrition/swap', {
+          method: 'POST', body: { dayIndex, slot, withIndex }
+        });
+        toast('Meal swapped!');
+        m.close();
+        VIEWS.lifestyle(document.getElementById('view'));
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  });
+}
+
+/* =================== EXISTING: PDF helpers =================== */
+function loadScriptOnce(src) {
+  return new Promise((res, rej) => {
+    if (document.querySelector(`script[src="${src}"]`)) return res();
+    const s = document.createElement('script'); s.src = src; s.async = false;
+    s.onload = res; s.onerror = rej; document.head.appendChild(s);
+  });
+}
+async function ensurePdfLibs() {
+  let ns = window.jspdf || window.jsPDF || window.jspPDF;
+  if (ns && typeof (ns.jsPDF || ns) === 'function') return ns;
+  toast('Loading PDF library...', '');
+  try { await loadScriptOnce('/js/jspdf.umd.min.js'); } catch {}
+  try { await loadScriptOnce('/js/jspdf.plugin.autotable.min.js'); } catch {}
+  ns = window.jspdf || window.jsPDF || window.jspPDF;
+  if (!ns) {
+    try { await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js'); } catch {}
+    try { await loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js'); } catch {}
+    ns = window.jspdf || window.jsPDF || window.jspPDF;
+  }
+  return ns;
+}
+
+/* =================== EXISTING: PDF EXPORT =================== */
+async function exportNutritionPDF(nut) {
+  try {
+  let ns = window.jspdf || window.jsPDF || window.jspPDF;
+  if (!ns || typeof (ns.jsPDF || ns) !== 'function') ns = await ensurePdfLibs();
+  if (!ns) {
+    toast('PDF library failed to load. Disable ad-blocker and refresh.', 'err');
+    return;
+  }
+  const jsPDF = ns.jsPDF || ns.default?.jsPDF || ns;
+  if (typeof jsPDF !== 'function') {
+    toast('PDF library failed to initialize.', 'err');
+    return;
+  }
+  const doc = new jsPDF('p', 'mm', 'a4');
+  const hasDocAutoTable = typeof doc.autoTable === 'function';
+  const hasNsAutoTable = typeof (ns.autoTable || window.autoTable) === 'function';
+
+  doc.setFontSize(20);
+  doc.setTextColor(14, 110, 100);
+  doc.text('HealthSphere AI', 14, 18);
+  doc.setFontSize(11);
+  doc.setTextColor(100);
+  doc.text('Personalized Nutrition Plan', 14, 25);
+
+  doc.setFontSize(10);
+  doc.setTextColor(60);
+  const prefLabel = nut.preference ? nut.preference.charAt(0).toUpperCase() + nut.preference.slice(1) : 'General';
+  const lines = [
+    `Diet preference: ${prefLabel}`,
+    nut.estimatedDailyCalories ? `Daily calorie target: ~${nut.estimatedDailyCalories} kcal` : '',
+    nut.tdeeEstimate ? `TDEE estimate: ${nut.tdeeEstimate} kcal` : '',
+    `Goal: ${nut.goal || 'maintain'}`,
+    `Hydration target: ${nut.hydrationTarget || '2-2.5 L/day'}`,
+    nut.editedByUser ? 'Status: Customized by user' : 'Status: AI-generated'
+  ].filter(Boolean);
+  let y = 31;
+  for (const line of lines) { doc.text(line, 14, y); y += 5; }
+  y += 2;
+
+  const headers = [['Day', 'Breakfast', 'Lunch', 'Dinner', 'Snacks']];
+  const rows = nut.weekPlan.map(d => [
+    d.day,
+    Array.isArray(d.breakfast) ? `${d.breakfast[0]} (${d.breakfast[1] || ''})` : d.breakfast || '',
+    Array.isArray(d.lunch) ? `${d.lunch[0]} (${d.lunch[1] || ''})` : d.lunch || '',
+    Array.isArray(d.dinner) ? `${d.dinner[0]} (${d.dinner[1] || ''})` : d.dinner || '',
+    d.snacks || ''
+  ]);
+
+  const tableOpts = {
+    startY: y,
+    head: headers,
+    body: rows,
+    theme: 'grid',
+    headStyles: { fillColor: [14, 110, 100], textColor: 255, fontSize: 9, fontStyle: 'bold' },
+    bodyStyles: { fontSize: 8.5, textColor: 40 },
+    columnStyles: { 0: { cellWidth: 18, fontStyle: 'bold' }, 4: { cellWidth: 35, textColor: [120, 120, 120] } },
+    margin: { left: 14, right: 14 },
+    didDrawPage: function (data) {
+      doc.setFontSize(7);
+      doc.setTextColor(160);
+      doc.text('HealthSphere AI - AI-generated nutrition ideas are educational, not medical nutrition therapy.', 14, doc.internal.pageSize.height - 8);
+    }
+  };
+  if (typeof doc.autoTable === 'function') doc.autoTable(tableOpts);
+  else if (typeof ns.autoTable === 'function') ns.autoTable(doc, tableOpts);
+  else if (typeof window.autoTable === 'function') window.autoTable(doc, tableOpts);
+  else {
+    let ty = y + 6;
+    doc.setFontSize(9); doc.setTextColor(255);
+    doc.setFillColor(14,110,100); doc.rect(14, ty-5, 182, 7, 'F');
+    doc.text(headers[0].join(' | '), 15, ty);
+    ty += 8; doc.setTextColor(40); doc.setFontSize(8);
+    rows.forEach(r => { if (ty > 280) { doc.addPage(); ty = 15; } doc.text(r.join(' | ').slice(0,110), 14, ty); ty += 5; });
+    doc.lastAutoTable = { finalY: ty };
+  }
+
+  y = (doc.lastAutoTable?.finalY || y + 60) + 8;
+
+  if (nut.notes && nut.notes.length > 0) {
+    doc.setFontSize(10);
+    doc.setTextColor(14, 110, 100);
+    doc.text('Important Notes', 14, y);
+    y += 6;
+    doc.setFontSize(8.5);
+    doc.setTextColor(80);
+    for (const note of nut.notes) {
+      const lines = doc.splitTextToSize(`• ${note}`, 175);
+      for (const line of lines) {
+        if (y > 275) { doc.addPage(); y = 20; }
+        doc.text(line, 14, y);
+        y += 4;
+      }
+    }
+  }
+
+  y += 4;
+  if (y > 265) { doc.addPage(); y = 20; }
+  doc.setFontSize(9);
+  doc.setTextColor(14, 110, 100);
+  doc.text('Plate guide: ½ vegetables · ¼ protein · ¼ whole grains', 14, y);
+  y += 5;
+  doc.setFontSize(7.5);
+  doc.setTextColor(160);
+  doc.text(`Generated on ${new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} by HealthSphere AI`, 14, y);
+
+  doc.save('HealthSphere-Nutrition-Plan.pdf');
+  toast('PDF exported successfully!');
+  } catch (e) {
+    console.error('PDF export failed', e);
+    toast('PDF export failed: ' + (e.message || e), 'err');
+  }
+}
+
+/* =================== REMINDERS VIEW =================== */
+const REM_TYPES = {
+  health: { label: 'Health', icon: 'stethoscope', tint: 'primary' },
+  screening: { label: 'Screening', icon: 'flask', tint: 'purple' },
+  medication: { label: 'Medication', icon: 'pill', tint: 'rose' },
+  measurement: { label: 'Measurement', icon: 'trending-up', tint: 'teal' },
+  lifestyle: { label: 'Lifestyle', icon: 'runner', tint: 'warn' },
+  appointment: { label: 'Appointment', icon: 'calendar', tint: 'info' }
+};
+
+VIEWS.reminders = async function (container) {
+  const d = await api('/api/reminders');
+  let reminders = (d.reminders || []).slice().sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1));
+  let remindersEnabled = localStorage.getItem('hs_rem_enabled') !== 'false';
+  let filter = localStorage.getItem('hs_rem_filter') || (remindersEnabled ? 'active' : 'all');
+
+  function daysUntil(iso) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const due = new Date(iso + 'T00:00:00');
+    return Math.round((due - today) / 86400000);
+  }
+  function dueBadge(r) {
+    if (r.status !== 'active') return `<span class="chip neutral ic-lbl">${icon(r.status === 'completed' ? 'check-circle' : 'x-circle', 12)} ${r.status === 'completed' ? 'Done' : 'Off'}</span>`;
+    const n = daysUntil(r.dueDate);
+    if (n < 0) return `<span class="chip bad ic-lbl">${icon('alert', 12)} ${Math.abs(n)}d overdue</span>`;
+    if (n === 0) return `<span class="chip warn ic-lbl">${icon('zap', 12)} Due today</span>`;
+    if (n === 1) return `<span class="chip warn ic-lbl">${icon('clock', 12)} Tomorrow</span>`;
+    return `<span class="chip ok ic-lbl">${icon('calendar-check', 12)} In ${n}d</span>`;
+  }
+
+  function render() {
+    const active = reminders.filter(r => r.status === 'active');
+    const completed = reminders.filter(r => r.status === 'completed');
+    const disabled = reminders.filter(r => r.status === 'disabled');
+    const shown = !remindersEnabled
+      ? []
+      : (filter === 'active' ? active : filter === 'completed' ? completed : filter === 'disabled' ? disabled : reminders);
+
+    container.innerHTML = `
+      <div class="topbar">
+        <div>
+          <h1>Reminders</h1>
+          <div class="page-sub">Screenings, medication, measurements and checkups — auto-generated from your signals plus anything you add.</div>
+        </div>
+        <div class="row" style="gap:12px;align-items:center;flex-shrink:0">
+          <label class="row" style="gap:8px;align-items:center;cursor:pointer;margin:0" title="Toggle reminders">
+            <span style="font-size:12.5px;font-weight:600;color:var(--muted)">${remindersEnabled ? 'Active' : 'Muted'}</span>
+            <label class="lg-toggle" style="margin:0"><input type="checkbox" id="rem-enable" ${remindersEnabled ? 'checked' : ''}><span class="lg-toggle-slider"></span></label>
+          </label>
+          <button class="btn" id="add-rem">${iconLabel('plus', 'New reminder', 14)}</button>
+        </div>
+      </div>
+
+      <div class="kpi-grid mb" style="grid-template-columns:repeat(3,1fr);display:${remindersEnabled ? 'grid' : 'none'}">
+        <div class="vital"><div class="vital-top"><b>Active</b><span class="ic-tint-primary">${icon('bell-ring', 18)}</span></div>
+          <div class="vital-value">${active.length}</div>
+          <div class="vital-sub"><span class="vital-trend">${active.filter(r => daysUntil(r.dueDate) < 0).length} overdue</span></div></div>
+        <div class="vital"><div class="vital-top"><b>Due this week</b><span class="ic-tint-teal">${icon('calendar-days', 18)}</span></div>
+          <div class="vital-value">${active.filter(r => { const n = daysUntil(r.dueDate); return n >= 0 && n <= 7; }).length}</div>
+          <div class="vital-sub"><span class="vital-trend">next 7 days</span></div></div>
+        <div class="vital"><div class="vital-top"><b>Completed</b><span class="ic-tint-ok">${icon('check-circle', 18)}</span></div>
+          <div class="vital-value">${completed.length}</div>
+          <div class="vital-sub"><span class="vital-trend">all time</span></div></div>
+      </div>
+
+      <div class="lg-nut-toolbar mb" id="rem-filters" style="display:${remindersEnabled ? 'flex' : 'none'}">
+        ${[['active', `bell Active (${active.length})`], ['completed', `check-circle Done (${completed.length})`], ['disabled', `x-circle Off (${disabled.length})`], ['all', `clipboard All (${reminders.length})`]]
+          .map(([k, l]) => {
+            const [ic, ...rest] = l.split(' ');
+            return `<button class="lg-day-tab ${filter === k ? 'active' : ''}" data-filter="${k}">${icon(ic, 13)} ${rest.join(' ')}</button>`;
+          }).join('')}
+      </div>
+
+      <div class="card">
+        ${!remindersEnabled
+          ? emptyState('Reminders are turned off', 'Use the toggle at the top to re-enable automated and custom reminders.', { icon: 'bell-off' })
+          : (shown.length ? shown.map(r => {
+          const meta = REM_TYPES[r.type] || REM_TYPES.health;
+          const overdue = r.status === 'active' && daysUntil(r.dueDate) < 0;
+          return `
+          <div class="tl-event ${overdue ? 'rem-overdue' : ''}" data-rem="${r.id}" style="align-items:flex-start">
+            <div class="ic-tile ${meta.tint}">${icon(meta.icon, 16)}</div>
+            <div style="flex:1;min-width:0">
+              <div class="tl-title">${esc(r.title)}${r.repeatable ? ' <span class="chip info" style="font-size:9px">repeats</span>' : ''}${r.source !== 'user' ? ' <span class="chip neutral" style="font-size:9px">auto</span>' : ''}</div>
+              <div class="tl-detail">${esc(meta.label)} · due <b>${fmtDateUI(r.dueDate)}</b> ${esc(r.notes || '')}</div>
+              ${r.actionLog && r.actionLog.length ? `<div class="tl-detail" style="font-size:11px;opacity:.7">Last action: ${esc(r.actionLog[r.actionLog.length - 1].action)}${r.actionLog[r.actionLog.length - 1].detail ? ' (' + esc(r.actionLog[r.actionLog.length - 1].detail) + ')' : ''}</div>` : ''}
+            </div>
+            <div class="row" style="gap:6px;flex-shrink:0;flex-wrap:wrap;align-items:center">
+              ${dueBadge(r)}
+              ${r.status === 'active' ? `
+                <button class="btn sm" data-act="complete" data-id="${r.id}" title="Mark done">${icon('check', 13)}</button>
+                <button class="btn sm secondary" data-snooze="${r.id}" title="Snooze 1 day">+1d</button>
+                <button class="btn sm secondary" data-snooze3="${r.id}" title="Snooze 3 days">+3d</button>
+                <button class="btn-icon sm" data-resched="${r.id}" title="Reschedule">${icon('calendar', 13)}</button>
+                <button class="btn-icon sm" data-act="disable" data-id="${r.id}" title="Turn off">${icon('x-circle', 13)}</button>
+              ` : r.status === 'completed' ? `
+                <button class="btn sm secondary ic-lbl" data-act="snooze" data-id="${r.id}" data-days="7" title="Reopen in 7 days">${icon('refresh', 12)} Reopen</button>
+              ` : `
+                <button class="btn sm secondary ic-lbl" data-act="snooze" data-id="${r.id}" data-days="1" title="Turn back on">${icon('zap', 12)} On</button>
+              `}
+            </div>
+          </div>`;
+        }).join('') : emptyState('Nothing here', filter === 'active' ? 'No active reminders. Add one or regenerate from insights.' : 'No reminders in this view.', { icon: 'bell' }))}
+      </div>`;
+
+    /* enable / disable toggle */
+    const tog = container.querySelector('#rem-enable');
+    if (tog) {
+      tog.onchange = () => {
+        remindersEnabled = tog.checked;
+        localStorage.setItem('hs_rem_enabled', remindersEnabled ? 'true' : 'false');
+        render();
+      };
+    }
+
+    /* filters */
+    container.querySelectorAll('[data-filter]').forEach(b => {
+      b.onclick = () => { filter = b.dataset.filter; localStorage.setItem('hs_rem_filter', filter); render(); };
+    });
+
+    /* actions */
+    container.querySelectorAll('[data-act]').forEach(b => {
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          await api(`/api/reminders/${b.dataset.id}/action`, { method: 'POST', body: { action: b.dataset.act, days: Number(b.dataset.days) || undefined } });
+          toast(b.dataset.act === 'complete' ? 'Marked done.' : 'Reminder turned off.');
+          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();
+        } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+      };
+    });
+
+    /* quick snooze */
+    container.querySelectorAll('[data-snooze],[data-snooze3]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.dataset.snooze || b.dataset.snooze3;
+        const days = b.dataset.snooze ? 1 : 3;
+        try {
+          await api(`/api/reminders/${id}/action`, { method: 'POST', body: { action: 'snooze', days } });
+          toast(`Snoozed +${days}d`);
+          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    });
+
+    /* reschedule */
+    container.querySelectorAll('[data-resched]').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.resched;
+        const rem = reminders.find(x => x.id === id);
+        const m = openModal(`
+          <h2 class="ic-lbl">${icon('calendar', 20)} Reschedule</h2>
+          <p class="page-sub mb">${esc(rem.title)}</p>
+          <label>New due date</label>
+          <input type="date" id="rs-date" value="${rem.dueDate}">
+          <div class="row mt" style="justify-content:flex-end;gap:8px">
+            <button class="btn secondary" id="rs-cancel">Cancel</button>
+            <button class="btn" id="rs-save">${iconLabel('check', 'Save', 14)}</button>
+          </div>`);
+        m.el.querySelector('#rs-cancel').onclick = () => m.close();
+        m.el.querySelector('#rs-save').onclick = async () => {
+          const date = m.el.querySelector('#rs-date').value;
+          if (!date) { toast('Pick a date.', 'err'); return; }
+          try {
+            await api(`/api/reminders/${id}/action`, { method: 'POST', body: { action: 'reschedule', date } });
+            toast('Rescheduled.'); m.close();
+            const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();
+          } catch (e) { toast(e.message, 'err'); }
+        };
+      };
+    });
+
+    /* add reminder */
+    container.querySelector('#add-rem').onclick = () => {
+      const m = openModal(`
+        <h2 class="ic-lbl">${icon('bell-ring', 20)} New reminder</h2>
+        <label>Title</label>
+        <input id="nr-title" placeholder="e.g. Book annual eye exam" maxlength="140">
+        <div class="grid g2 mt" style="gap:12px">
+          <div><label>Type</label>
+            <select id="nr-type">${Object.entries(REM_TYPES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></div>
+          <div><label>Due date</label>
+            <input type="date" id="nr-date" value="${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}"></div>
+        </div>
+        <div class="mt"></div>
+        <label>Notes (optional)</label>
+        <input id="nr-notes" placeholder="Anything to remember" maxlength="300">
+        <div class="mt row" style="gap:8px;align-items:center">
+          <label style="margin:0"><input type="checkbox" id="nr-repeat"> Repeat weekly</label>
+        </div>
+        <div class="row mt" style="justify-content:flex-end;gap:8px">
+          <button class="btn secondary" id="nr-cancel">Cancel</button>
+          <button class="btn" id="nr-save">${iconLabel('plus', 'Add reminder', 14)}</button>
+        </div>`, { wide: false });
+      m.el.querySelector('#nr-cancel').onclick = () => m.close();
+      m.el.querySelector('#nr-save').onclick = async () => {
+        const title = m.el.querySelector('#nr-title').value.trim();
+        if (!title) { toast('Title is required.', 'err'); return; }
+        try {
+          await api('/api/reminders', {
+            method: 'POST',
+            body: {
+              title,
+              type: m.el.querySelector('#nr-type').value,
+              dueDate: m.el.querySelector('#nr-date').value,
+              notes: m.el.querySelector('#nr-notes').value.trim(),
+              repeatable: m.el.querySelector('#nr-repeat').checked
+            }
+          });
+          toast('Reminder added.'); m.close();
+          const r2 = await api('/api/reminders'); reminders = (r2.reminders || []).slice().sort((a, c) => (a.dueDate < c.dueDate ? -1 : 1)); render();
+        } catch (e) { toast(e.message, 'err'); }
+      };
+    };
+  }
+
+  render();
+};
